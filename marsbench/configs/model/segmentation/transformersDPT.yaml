@@ -1,0 +1,13 @@
+name: transformersDPT
+class_path: marsbench.models.segmentation.transformersDPT
+status: test
+# HF backbone
+#hf_backbone: "Intel/dpt-large-ade"
+hf_backbone: "Intel/dpt-hybrid-midas"
+# 是否使用HF的head初始化
+pretrained: true
+# 是否冻结encoder
+freeze_layers: false
+# 你的ViTMAE权重路径
+vitmae_ckpt: null
+input_size: [3, 384, 384]

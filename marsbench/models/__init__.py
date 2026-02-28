@@ -19,6 +19,8 @@ from .segmentation import DeepLab
 from .segmentation import Mask2Former
 from .segmentation import Segformer
 from .segmentation import UNet
+#from .segmentation import ViTMAESemSeg
+from .segmentation import TransformersDPT
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +39,8 @@ MODEL_REGISTRY = {
         "Segformer": Segformer,
         "Mask2Former": Mask2Former,
         "DPT": DPT,
+        "transformersDPT": TransformersDPT,
+        #"ViTMAE": ViTMAESemSeg,
     },
     "detection": {
         "FasterRCNN": FasterRCNN,

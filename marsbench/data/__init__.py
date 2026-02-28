@@ -13,7 +13,8 @@ from omegaconf import DictConfig
 from torch.utils.data import Dataset
 from torch.utils.data import Subset
 
-from huggingface_hub import HfApi, HfFolder, login, whoami
+#from huggingface_hub import HfApi, HfFolder, login, whoami
+from huggingface_hub import HfApi, login, whoami, get_token
 from huggingface_hub.utils import HfHubHTTPError
 
 from marsbench.data.segmentation.Mask2FormerWrapper import Mask2FormerWrapper
@@ -193,7 +194,8 @@ def instantiate_dataset_hf(hf_class, cfg, transform, split, bbox_format=None, an
 
 
 def is_hf_logged_in():
-    token = HfFolder.get_token()
+    #token = HfFolder.get_token()
+    token = get_token()
     if token is None:
         return False
     try:
