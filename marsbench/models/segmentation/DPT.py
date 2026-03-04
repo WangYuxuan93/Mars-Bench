@@ -3,6 +3,7 @@ DPT model implementation for Mars surface image segmentation.
 """
 
 import logging
+import torch
 
 import segmentation_models_pytorch as smp
 
@@ -32,6 +33,13 @@ class DPT(BaseSegmentationModel):
             in_channels=in_channels,
             classes=num_classes,
         )
+
+        ckpt = self.cfg.model.get("encoder_checkpoint_path", None)
+        if ckpt:
+            sd = torch.load(ckpt, map_location="cpu")
+            # 关键：TimmViTEncoder 里 timm 模型在 model.encoder.model
+            model.encoder.model.load_state_dict(sd, strict=False)
+            logger.info(f"Loaded MAE-pretrained encoder weights from: {ckpt}")
 
         # Handle layer freezing
         if freeze_layers and not pretrained:
