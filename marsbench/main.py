@@ -52,6 +52,7 @@ def main(cfg: DictConfig):
 
         # Initialize trainer
         trainer_config = {k: v for k, v in cfg.training.trainer.items() if k not in ["logger"]}
+        print ("Training config:", trainer_config)
         trainer = Trainer(
             callbacks=callbacks,
             logger=loggers,

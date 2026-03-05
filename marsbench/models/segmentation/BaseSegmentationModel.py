@@ -45,6 +45,8 @@ class BaseSegmentationModel(LightningModule, ABC):
         if self.cfg.training_type in ["scratch_training", "feature_extraction", "transfer_learning"]:
             self.cfg.model.pretrained = False if self.cfg.training_type == "scratch_training" else True
             self.cfg.model.freeze_layers = True if self.cfg.training_type == "feature_extraction" else False
+        elif self.cfg.training_type == "finetune":
+            print (f"Training Type is finetune\npretrained: {self.cfg.model.pretrained}, freeze_layers: {self.cfg.model.freeze_layers}")
         else:
             raise ValueError(f"Training type '{self.cfg.training_type}' not recognized.")
 
@@ -161,6 +163,7 @@ class BaseSegmentationModel(LightningModule, ABC):
 
     # ---------------- optimizer & scheduler ----------------
     def configure_optimizers(self):
+        print ("Optimizer Info:", self.cfg.training)
         opt_name = self.cfg.training.optimizer.name.lower()
         kw = dict(lr=self.cfg.training.optimizer.lr, weight_decay=self.cfg.training.optimizer.get("weight_decay", 0.0))
         if opt_name == "adam":
