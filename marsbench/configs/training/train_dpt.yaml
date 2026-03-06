@@ -1,0 +1,60 @@
+# Training specific parameters
+batch_size: 16
+num_workers: 4  # Special value: 0 means auto-detect (will use CPU count / 2)
+monitor_on: 'val/loss'
+ignore_index: -100  # int (-100 to skip ignoring)
+
+# Optimzer
+optimizer:
+  name: 'AdamW'  # Supported: 'Adam', 'AdamW', 'SGD'
+  lr: 1e-4
+  weight_decay: 0.01
+  # momentum: 0.9 # Only relevant for SGD
+
+scheduler:
+  name: 'cosine' # [cosine, step, plateau]
+  enabled: true
+  # Cosine params
+  t_max: 100
+  eta_min: 1e-6
+  # Step params
+  step_size: 10
+  gamma: 0.1
+  # ReduceLROnPlateau params
+  patience: 5
+  factor: 0.1
+  monitor: ${oc.select:training.monitor_on}
+
+# loss
+# classification: cross_entropy (auto-switches to bce for binary/multilabel subtasks)
+# segmentation: cross_entropy, generalized_dice, combined (cross_entropy + generalized_dice)
+criterion:
+  name: 'cross_entropy'
+  alpha: 0.5 # combined loss parameter: alpha * cross_entropy + (1 - alpha) * generalized_dice
+  weight_type: 'square' # [uniform, simple, square] only for generalized_dice or combined
+  smooth: 1e-5 # only for generalized_dice or combined
+
+
+# Early stopping
+early_stopping_patience: 10
+
+# PyTorch Lightning Trainer arguments
+trainer:
+  max_epochs: 100
+  accelerator: 'auto'      # auto-detects GPU/CPU
+  devices: 'auto'          # auto-detects number of available devices
+  strategy: 'auto'         # auto-selects DDP for multi-GPU
+  sync_batchnorm: true    # important for multi-GPU training
+
+  # Mixed precision settings
+  precision: 32    # Start stable; switch back to '16-mixed' after confirming no NaNs
+
+  enable_checkpointing: true
+
+  # Optional: any additional trainer args that might be needed
+  enable_progress_bar: true
+  log_every_n_steps: 10
+
+  # Multi-GPU specific settings
+  num_nodes: 1            # number of compute nodes
+  accumulate_grad_batches: 1  # gradient accumulation steps

@@ -24,6 +24,7 @@ class DPT(BaseSegmentationModel):
         pretrained = self.cfg.model.pretrained
         freeze_layers = self.cfg.model.freeze_layers
 
+
         # Set encoder weights based on pretrained flag
         encoder_weights = "imagenet" if pretrained else None
 
@@ -40,20 +41,24 @@ class DPT(BaseSegmentationModel):
             # 关键：TimmViTEncoder 里 timm 模型在 model.encoder.model
             model.encoder.model.load_state_dict(sd, strict=False)
             logger.info(f"Loaded MAE-pretrained encoder weights from: {ckpt}")
+            pretrained = True
             # ---- sanity checks (a few tensors) ----
-            enc = model.encoder.model
-            with torch.no_grad():
-                pe = enc.patch_embed.proj.weight
-                logger.info(f"[ENC] patch_embed.proj.weight mean={pe.mean().item():.6f} std={pe.std().item():.6f}")
+        enc = model.encoder.model
+        with torch.no_grad():
+            pe = enc.patch_embed.proj.weight
+            logger.info(f"[ENC] patch_embed.proj.weight mean={pe.mean().item():.6f} std={pe.std().item():.6f}")
 
-                qkv_w = enc.blocks[0].attn.qkv.weight
-                logger.info(f"[ENC] blocks.0.attn.qkv.weight mean={qkv_w.mean().item():.6f} std={qkv_w.std().item():.6f}")
+            qkv_w = enc.blocks[0].attn.qkv.weight
+            logger.info(f"[ENC] blocks.0.attn.qkv.weight mean={qkv_w.mean().item():.6f} std={qkv_w.std().item():.6f}")
 
-                n1 = enc.blocks[0].norm1.weight
-                logger.info(f"[ENC] blocks.0.norm1.weight mean={n1.mean().item():.6f} std={n1.std().item():.6f}")
+            n1 = enc.blocks[0].norm1.weight
+            logger.info(f"[ENC] blocks.0.norm1.weight mean={n1.mean().item():.6f} std={n1.std().item():.6f}")
 
-                mlp1 = enc.blocks[0].mlp.fc1.weight
-                logger.info(f"[ENC] blocks.0.mlp.fc1.weight mean={mlp1.mean().item():.6f} std={mlp1.std().item():.6f}")
+            mlp1 = enc.blocks[0].mlp.fc1.weight
+            logger.info(f"[ENC] blocks.0.mlp.fc1.weight mean={mlp1.mean().item():.6f} std={mlp1.std().item():.6f}")
+
+        print ("pretrained:", pretrained)
+        print ("freeze_layers:", freeze_layers)
 
         # Handle layer freezing
         if freeze_layers and not pretrained:
