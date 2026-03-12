@@ -8,13 +8,49 @@ from transformers import AutoModel
 import timm
 
 
+def load_hf_sd(hf_dir: str) -> dict:
+    """Return a plain HF-style state dict from an HF checkpoint directory.
+
+    Handles two cases:
+    1. Standard HF model checkpoint  →  load via AutoModel as before.
+    2. MIMWithDistill wrapper checkpoint (from run_mim distillation training)
+       →  load the raw weight file, strip the "student." prefix, and discard
+          all "teacher.*" keys.  No AutoModel is needed because the wrapper
+          is not a registered HF model class.
+    """
+    import glob
+
+    # Look for raw weight files first so we can inspect the key names.
+    candidates = (
+        glob.glob(os.path.join(hf_dir, "model.safetensors"))
+        + glob.glob(os.path.join(hf_dir, "pytorch_model.bin"))
+    )
+
+    if candidates:
+        path = candidates[0]
+        if path.endswith(".safetensors"):
+            from safetensors.torch import load_file
+            raw_sd = load_file(path)
+        else:
+            raw_sd = torch.load(path, map_location="cpu", weights_only=True)
+
+        if any(k.startswith("student.") for k in raw_sd):
+            print("Detected MIMWithDistill wrapper checkpoint – extracting student weights only.")
+            return {k[len("student."):]: v for k, v in raw_sd.items() if k.startswith("student.")}
+
+        return raw_sd
+
+    # Fallback: standard HF checkpoint with config.json – let AutoModel handle it.
+    hf_model = AutoModel.from_pretrained(hf_dir)
+    return hf_model.state_dict()
+
+
 def convert(hf_dir: str, timm_name: str, out_path: str):
 
-    # 1 Load HF model (works for ViT / ViTMAE)
-    hf_model = AutoModel.from_pretrained(hf_dir)
-    hf_sd = hf_model.state_dict()
+    # 1 Load HF state dict (handles plain HF models and MIMWithDistill wrappers)
+    hf_sd = load_hf_sd(hf_dir)
 
-    # detect prefix (MAE models have "vit.")
+    # detect prefix (MaskedImageModeling models have "vit.")
     if "vit.embeddings.cls_token" in hf_sd:
         prefix = "vit."
     else:
