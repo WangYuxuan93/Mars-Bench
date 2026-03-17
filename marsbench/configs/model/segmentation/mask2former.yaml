@@ -3,3 +3,5 @@ class_path: marsbench.models.segmentation.Mask2Former
 model_name: facebook/mask2former-swin-tiny-ade-semantic
 input_size: [3, 512, 512]
 status: test
+pretrained: true
+freeze_layers: false
