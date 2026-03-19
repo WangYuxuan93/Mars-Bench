@@ -42,8 +42,8 @@ class MarsDataModule(pl.LightningDataModule):
             self.train_dataset, self.val_dataset, self.test_dataset = get_dataset(self.cfg, transforms)
             if self.cfg.model.name.lower() == "mask2former":
                 self.image_processor = Mask2FormerImageProcessor(
-                    ignore_index=self.cfg.training.ignore_index,
-                    reduce_labels=False,
+                    ignore_index=255,   # standard Mask2Former ignore value after reduce_labels
+                    reduce_labels=True, # shift labels: 0(bg)→255(ignored), 1(cone)→0(foreground)
                 )
         elif self.cfg.task == "detection":
             self.train_dataset, self.val_dataset, self.test_dataset = get_dataset(
