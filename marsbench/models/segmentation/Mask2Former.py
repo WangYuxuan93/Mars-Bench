@@ -18,8 +18,8 @@ class Mask2Former(BaseSegmentationModel):
         super(Mask2Former, self).__init__(cfg)
 
         self.image_processor = Mask2FormerImageProcessor(
-            ignore_index=255,   # standard Mask2Former ignore value after reduce_labels
-            reduce_labels=True, # shift labels: 0(bg)→255(ignored), 1(cone)→0(foreground)
+            ignore_index=self.cfg.training.ignore_index,
+            reduce_labels=False,
         )
 
     def _initialize_model(self):
@@ -28,7 +28,7 @@ class Mask2Former(BaseSegmentationModel):
 
         model = Mask2FormerForUniversalSegmentation.from_pretrained(
             self.cfg.model.model_name,
-            num_labels=self.cfg.data.num_classes - 1,
+            num_labels=self.cfg.data.num_classes,
             ignore_mismatched_sizes=True,
         )
 
