@@ -308,7 +308,12 @@ def main():
     parser.add_argument("--num_classes",    type=int, required=True,
                         help="Number of classes (including background).")
     parser.add_argument("--output_dir",     required=True,
-                        help="Root directory for all outputs.")
+                        help="Root directory for all outputs. Accepted samples are written to "
+                             "output_dir/data/train/images| masks, matching MarsBench "
+                             "ConeQuest_Segmentation directory layout.")
+    parser.add_argument("--split",          default="train",
+                        help="Split name used in the ConeQuest directory layout "
+                             "(default: train). Use 'val' or 'test' if needed.")
     parser.add_argument("--conf_threshold", type=float, default=0.80,
                         help="Per-image mean-confidence threshold. "
                              "Images below this are rejected (default: 0.80).")
@@ -327,14 +332,15 @@ def main():
     out_root = Path(args.output_dir)
 
     # Prepare output directories
-    accepted_img_dir  = out_root / "accepted" / "images"
-    accepted_mask_dir = out_root / "accepted" / "masks"
+    # ConeQuest_Segmentation expects:  data_dir/data/{split}/images|masks/
+    accepted_img_dir  = out_root / "data" / args.split / "images"
+    accepted_mask_dir = out_root / "data" / args.split / "masks"
     accepted_img_dir.mkdir(parents=True, exist_ok=True)
     accepted_mask_dir.mkdir(parents=True, exist_ok=True)
 
     if args.save_rejected:
-        rejected_img_dir  = out_root / "rejected" / "images"
-        rejected_mask_dir = out_root / "rejected" / "masks"
+        rejected_img_dir  = out_root / "rejected" / args.split / "images"
+        rejected_mask_dir = out_root / "rejected" / args.split / "masks"
         rejected_img_dir.mkdir(parents=True, exist_ok=True)
         rejected_mask_dir.mkdir(parents=True, exist_ok=True)
 
