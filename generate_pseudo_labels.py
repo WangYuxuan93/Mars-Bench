@@ -429,13 +429,16 @@ def main():
         if args.fp16:
             model = model.half()
             logger.info("Model cast to float16.")
-        if args.compile:
-            model = torch.compile(model)
-            logger.info("Model compiled with torch.compile.")
         n_gpus = torch.cuda.device_count() if device.type == "cuda" else 1
         if device.type == "cuda" and n_gpus > 1:
             model = torch.nn.DataParallel(model)
             logger.info(f"Using {n_gpus} GPUs via DataParallel.")
+            if args.compile:
+                logger.warning("--compile is disabled when using multiple GPUs "
+                               "(torch.compile + DataParallel conflict).")
+        elif args.compile:
+            model = torch.compile(model)
+            logger.info("Model compiled with torch.compile.")
         image_processor = Mask2FormerImageProcessor(ignore_index=255)
 
         total_batch = args.per_gpu_batch_size * n_gpus
