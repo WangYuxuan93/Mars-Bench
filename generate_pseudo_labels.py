@@ -67,12 +67,6 @@ _IMAGENET_STD  = (0.229, 0.224, 0.225)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
 
 # Visualization color palette: index → BGR color
-_PALETTE = {
-    0: None,               # background – no overlay
-    1: (0, 200, 0),        # foreground – green
-    2: (200, 0, 0),        # class 2 – blue
-    3: (0, 0, 200),        # class 3 – red
-}
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +218,8 @@ def compute_sample_stats(pred: np.ndarray, conf_map: np.ndarray,
 # ---------------------------------------------------------------------------
 
 def make_overlay(image_path: str, mask: np.ndarray,
-                 alpha: float = 0.45) -> np.ndarray:
-    """Draw a semi-transparent colored mask overlay on the original image.
+                 alpha: float = 0.25) -> np.ndarray:
+    """Brightness-only mask visualization: foreground brightened, background dimmed.
 
     Returns a BGR uint8 image.
     """
@@ -234,28 +228,14 @@ def make_overlay(image_path: str, mask: np.ndarray,
         raise FileNotFoundError(image_path)
     img = cv2.resize(img, (mask.shape[1], mask.shape[0]),
                      interpolation=cv2.INTER_LINEAR)
-    overlay = img.copy()
+    img_f  = img.astype(np.float32)
+    fg     = mask > 0
 
-    for cls_id, color in _PALETTE.items():
-        if color is None:
-            continue
-        region = mask == cls_id
-        if not region.any():
-            continue
-        overlay[region] = color
+    result = img_f.copy()
+    result[fg]  = np.clip(img_f[fg]  + alpha * 255, 0, 255)
+    result[~fg] = np.clip(img_f[~fg] - alpha * 255, 0, 255)
 
-    vis = cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0)
-
-    # Draw a thin contour around foreground regions for clarity
-    for cls_id, color in _PALETTE.items():
-        if color is None:
-            continue
-        region = (mask == cls_id).astype(np.uint8)
-        contours, _ = cv2.findContours(region, cv2.RETR_EXTERNAL,
-                                       cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(vis, contours, -1, color, 1)
-
-    return vis
+    return result.astype(np.uint8)
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +293,15 @@ def main():
     # Optional outputs
     parser.add_argument("--save_confidence", action="store_true")
     parser.add_argument("--save_rejected",   action="store_true")
+    parser.add_argument("--save_all_preds",  action="store_true",
+                        help="Save ALL predicted masks+images to all/{split}/ "
+                             "so you can re-filter later with --refilter.")
+
+    # Re-filter mode (no inference needed)
+    parser.add_argument("--refilter", action="store_true",
+                        help="Skip inference. Re-apply thresholds using the "
+                             "existing stats.json and all/{split}/ predictions. "
+                             "Requires a previous run with --save_all_preds.")
 
     # Inference
     parser.add_argument("--batch_size",  type=int, default=8)
@@ -333,6 +322,12 @@ def main():
     for d in [accepted_img_dir, accepted_mask_dir, vis_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
+    all_img_dir  = out_root / "all" / args.split / "images"
+    all_mask_dir = out_root / "all" / args.split / "masks"
+    if args.save_all_preds or args.refilter:
+        all_img_dir.mkdir(parents=True, exist_ok=True)
+        all_mask_dir.mkdir(parents=True, exist_ok=True)
+
     if args.save_rejected:
         rej_img_dir  = out_root / "rejected" / args.split / "images"
         rej_mask_dir = out_root / "rejected" / args.split / "masks"
@@ -343,39 +338,80 @@ def main():
         conf_dir = out_root / "confidence"
         conf_dir.mkdir(parents=True, exist_ok=True)
 
-    # ------------------------------------------------------------ load model
-    model           = load_model(args.checkpoint, args.base_model,
-                                 args.num_classes, device)
-    image_processor = Mask2FormerImageProcessor(ignore_index=255)
+    # ============================================================ REFILTER MODE
+    if args.refilter:
+        stats_path = out_root / "stats.json"
+        if not stats_path.exists():
+            raise FileNotFoundError(
+                f"stats.json not found at {stats_path}. "
+                "Run without --refilter first (with --save_all_preds)."
+            )
+        if not any(all_mask_dir.iterdir()):
+            raise FileNotFoundError(
+                f"No predictions found in {all_mask_dir}. "
+                "Run without --refilter first (with --save_all_preds)."
+            )
 
-    dataset    = UnlabeledImageDataset(args.image_dir, args.input_size)
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
-                            num_workers=args.num_workers, collate_fn=collate_fn,
-                            pin_memory=(args.device == "cuda"))
+        logger.info(f"Re-filter mode: reading stats from {stats_path}")
+        with open(stats_path) as f:
+            saved = json.load(f)
 
-    # ------------------------------------ Phase 1: predict, buffer metadata
-    # We keep (path, pred, conf_map) in a flat list, then do balancing offline.
-    # For very large datasets consider streaming to a temp dir instead.
-    all_samples = []   # list of dicts
-
-    logger.info("Phase 1: running inference …")
-    for pixel_tensors, paths, orig_hs, orig_ws in tqdm(dataloader, desc="Predict"):
-        orig_sizes = list(zip(orig_hs, orig_ws))
-        preds, conf_maps = predict_batch(model, image_processor,
-                                         pixel_tensors, orig_sizes, device)
-
-        for path, pred, conf_map in zip(paths, preds, conf_maps):
-            stats = compute_sample_stats(pred, conf_map, args.fg_class_id)
-            if args.save_confidence:
-                save_confidence_map(conf_map,
-                                    conf_dir / f"{Path(path).stem}.png")
+        # Rebuild all_samples from disk
+        all_samples = []
+        for rec in saved["samples"]:
+            stem     = Path(rec["file"]).stem
+            img_path = all_img_dir  / f"{stem}.png"
+            msk_path = all_mask_dir / f"{stem}.png"
+            if not img_path.exists() or not msk_path.exists():
+                logger.warning(f"Missing all/ files for {stem}, skipping.")
+                continue
             all_samples.append({
-                "path":      path,
-                "stem":      Path(path).stem,
-                "pred":      pred,
-                # conf_map is large (float32 H×W); only keep scalar confidence
-                **stats,
+                "path":        str(img_path),
+                "stem":        stem,
+                "pred":        cv2.imread(str(msk_path), cv2.IMREAD_GRAYSCALE),
+                "confidence":  rec["confidence"],
+                "fg_ratio":    rec["fg_ratio"],
+                "fg_pixels":   rec["fg_pixels"],
+                "is_positive": rec["is_positive"],
             })
+        logger.info(f"Loaded {len(all_samples)} samples from all/ dir.")
+    # ============================================================ INFERENCE MODE
+    else:
+        if not args.save_all_preds and not hasattr(args, 'checkpoint'):
+            pass  # checkpoint is required arg, argparse handles it
+
+        model           = load_model(args.checkpoint, args.base_model,
+                                     args.num_classes, device)
+        image_processor = Mask2FormerImageProcessor(ignore_index=255)
+
+        dataset    = UnlabeledImageDataset(args.image_dir, args.input_size)
+        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
+                                num_workers=args.num_workers, collate_fn=collate_fn,
+                                pin_memory=(args.device == "cuda"))
+
+        all_samples = []
+
+        logger.info("Phase 1: running inference …")
+        for pixel_tensors, paths, orig_hs, orig_ws in tqdm(dataloader, desc="Predict"):
+            orig_sizes = list(zip(orig_hs, orig_ws))
+            preds, conf_maps = predict_batch(model, image_processor,
+                                             pixel_tensors, orig_sizes, device)
+
+            for path, pred, conf_map in zip(paths, preds, conf_maps):
+                stats = compute_sample_stats(pred, conf_map, args.fg_class_id)
+                if args.save_confidence:
+                    save_confidence_map(conf_map,
+                                        conf_dir / f"{Path(path).stem}.png")
+                if args.save_all_preds:
+                    stem = Path(path).stem
+                    save_image_copy(path,  all_img_dir  / f"{stem}.png")
+                    save_mask(pred,        all_mask_dir / f"{stem}.png")
+                all_samples.append({
+                    "path":      path,
+                    "stem":      Path(path).stem,
+                    "pred":      pred,
+                    **stats,
+                })
 
     # ---------------------------------- Phase 2: quality filter + balancing
     logger.info("Phase 2: filtering and balancing …")
@@ -459,8 +495,24 @@ def main():
     )
 
     all_conf = [s["confidence"] for s in all_samples]
+    total    = len(all_conf)
+
+    # Confidence distribution in 10% buckets
+    buckets = {}
+    bucket_lines = []
+    for lo in range(0, 100, 10):
+        hi    = lo + 10
+        key   = f"{lo:02d}-{hi:02d}%"
+        count = sum(1 for c in all_conf if lo / 100 <= c < hi / 100)
+        # include 100% in the last bucket
+        if hi == 100:
+            count = sum(1 for c in all_conf if lo / 100 <= c <= 1.0)
+        pct   = count / total * 100 if total else 0
+        buckets[key] = {"count": count, "pct": round(pct, 1)}
+        bucket_lines.append(f"    {key}: {count:5d}  ({pct:5.1f}%)")
+
     summary  = {
-        "total":           len(all_samples),
+        "total":           total,
         "accepted":        len(accepted),
         "accepted_pos":    len(positives),
         "accepted_neg":    len(neg_keep),
@@ -471,18 +523,21 @@ def main():
         "neg_pos_ratio":   args.neg_pos_ratio,
         "mean_conf":       round(float(np.mean(all_conf)),   4),
         "median_conf":     round(float(np.median(all_conf)), 4),
+        "conf_distribution": buckets,
     }
 
     stats_path = out_root / "stats.json"
     with open(stats_path, "w") as f:
         json.dump({"summary": summary, "samples": records}, f, indent=2)
 
+    dist_str = "\n".join(reversed(bucket_lines))   # high → low
     logger.info(
         f"\nDone.\n"
         f"  Accepted : {len(accepted)} "
         f"(pos={len(positives)}, neg={len(neg_keep)})\n"
         f"  Rejected : {len(rejected)}\n"
-        f"  Visualizations → {vis_dir}\n"
+        f"\nConfidence distribution (high → low):\n{dist_str}\n"
+        f"\n  Visualizations → {vis_dir}\n"
         f"  Stats          → {stats_path}\n"
         f"  Pseudo-labels  → {accepted_img_dir.parent}"
     )
