@@ -36,7 +36,7 @@ python generate_pseudo_labels.py \\
   --min_fg_ratio   0.005 \\
   --neg_pos_ratio  1.0 \\
   [--save_confidence] [--save_rejected] \\
-  [--batch_size 8] [--input_size 512] [--num_workers 4] [--device cuda]
+  [--per_gpu_batch_size 8] [--input_size 512] [--num_workers 4] [--device cuda]
 """
 
 import argparse
@@ -175,7 +175,8 @@ def predict_batch(
         return_tensors="pt",
         do_resize=False, do_rescale=False, do_normalize=False,
     )
-    pixel_values = processed["pixel_values"].to(device)
+    pixel_values = processed["pixel_values"].to(device=device,
+                                                   dtype=next(model.parameters()).dtype)
     pixel_mask   = processed["pixel_mask"].to(device)
     outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask)
 
@@ -302,6 +303,9 @@ def main():
     # Optional outputs
     parser.add_argument("--save_confidence", action="store_true")
     parser.add_argument("--save_rejected",   action="store_true")
+    parser.add_argument("--visualize",       action="store_true",
+                        help="Save mask-overlay visualizations to visualize/. "
+                             "Skipped by default to save time on large datasets.")
     parser.add_argument("--save_all_preds",  action="store_true",
                         help="Save ALL predicted masks+images to all/{split}/ "
                              "so you can re-filter later with --refilter.")
@@ -313,9 +317,17 @@ def main():
                              "Requires a previous run with --save_all_preds.")
 
     # Inference
-    parser.add_argument("--batch_size",  type=int, default=8)
+    parser.add_argument("--per_gpu_batch_size",  type=int, default=8,
+                        help="Batch size per GPU (total = batch_size × num_gpus).")
     parser.add_argument("--input_size",  type=int, default=512)
     parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--prefetch_factor", type=int, default=4,
+                        help="DataLoader prefetch factor per worker (default: 4).")
+    parser.add_argument("--fp16", action="store_true",
+                        help="Run model in float16 for faster inference (~1.5-2x).")
+    parser.add_argument("--compile", action="store_true",
+                        help="torch.compile the model (~20-30%% speedup, "
+                             "slow first batch).")
     parser.add_argument("--device",
                         default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
@@ -333,8 +345,10 @@ def main():
     accepted_img_dir  = write_root / "data" / args.split / "images"
     accepted_mask_dir = write_root / "data" / args.split / "masks"
     vis_dir           = write_root / "visualize"
-    for d in [accepted_img_dir, accepted_mask_dir, vis_dir]:
+    for d in [accepted_img_dir, accepted_mask_dir]:
         d.mkdir(parents=True, exist_ok=True)
+    if args.visualize:
+        vis_dir.mkdir(parents=True, exist_ok=True)
 
     all_img_dir  = out_root / "all" / args.split / "images"
     all_mask_dir = out_root / "all" / args.split / "masks"
@@ -370,15 +384,26 @@ def main():
         with open(stats_path) as f:
             saved = json.load(f)
 
-        # Rebuild all_samples from disk
+        # Rebuild all_samples from disk.
+        # Original images are NOT copied to all/ (to save space/time),
+        # so fall back to the recorded original path in stats.json,
+        # or search in all_img_dir for backward compatibility.
         all_samples = []
         for rec in saved["samples"]:
             stem     = Path(rec["file"]).stem
-            img_path = all_img_dir  / f"{stem}.png"
             msk_path = all_mask_dir / f"{stem}.png"
-            if not img_path.exists() or not msk_path.exists():
-                logger.warning(f"Missing all/ files for {stem}, skipping.")
+            if not msk_path.exists():
+                logger.warning(f"Missing mask in all/ for {stem}, skipping.")
                 continue
+            # Use original_path if recorded, otherwise try all_img_dir
+            orig_path = rec.get("original_path")
+            if orig_path and Path(orig_path).exists():
+                img_path = orig_path
+            else:
+                img_path = all_img_dir / f"{stem}.png"
+                if not img_path.exists():
+                    logger.warning(f"Image not found for {stem}, skipping.")
+                    continue
             all_samples.append({
                 "path":        str(img_path),
                 "stem":        stem,
@@ -399,14 +424,31 @@ def main():
         if missing:
             parser.error(f"Inference mode requires: {', '.join(missing)}")
 
-        model           = load_model(args.checkpoint, args.base_model,
-                                     args.num_classes, device)
+        model = load_model(args.checkpoint, args.base_model,
+                           args.num_classes, device)
+        if args.fp16:
+            model = model.half()
+            logger.info("Model cast to float16.")
+        if args.compile:
+            model = torch.compile(model)
+            logger.info("Model compiled with torch.compile.")
+        n_gpus = torch.cuda.device_count() if device.type == "cuda" else 1
+        if device.type == "cuda" and n_gpus > 1:
+            model = torch.nn.DataParallel(model)
+            logger.info(f"Using {n_gpus} GPUs via DataParallel.")
         image_processor = Mask2FormerImageProcessor(ignore_index=255)
 
+        total_batch = args.per_gpu_batch_size * n_gpus
+        logger.info(f"batch_size per GPU={args.per_gpu_batch_size}, "
+                    f"total batch={total_batch} ({n_gpus} GPU(s))")
         dataset    = UnlabeledImageDataset(args.image_dir, args.input_size)
-        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
-                                num_workers=args.num_workers, collate_fn=collate_fn,
-                                pin_memory=(args.device == "cuda"))
+        dataloader = DataLoader(
+            dataset, batch_size=total_batch, shuffle=False,
+            num_workers=args.num_workers, collate_fn=collate_fn,
+            pin_memory=(args.device == "cuda"),
+            prefetch_factor=args.prefetch_factor if args.num_workers > 0 else None,
+            persistent_workers=args.num_workers > 0,
+        )
 
         all_samples = []
 
@@ -423,8 +465,9 @@ def main():
                                         conf_dir / f"{Path(path).stem}.png")
                 if args.save_all_preds:
                     stem = Path(path).stem
-                    save_image_copy(path,  all_img_dir  / f"{stem}.png")
-                    save_mask(pred,        all_mask_dir / f"{stem}.png")
+                    # Only save mask; record original image path to avoid
+                    # copying 10M images (saves time and disk space)
+                    save_mask(pred, all_mask_dir / f"{stem}.png")
                 all_samples.append({
                     "path":      path,
                     "stem":      Path(path).stem,
@@ -476,17 +519,16 @@ def main():
         save_image_copy(s["path"], accepted_img_dir  / f"{stem}.png")
         save_mask(s["pred"],       accepted_mask_dir / f"{stem}.png")
 
-        # visualization – always generated for accepted samples
-        vis = make_overlay(s["path"], s["pred"])
-        # annotate with stats in corner
-        label = (f"conf={s['confidence']:.2f}  "
-                 f"fg={s['fg_ratio']*100:.1f}%  "
-                 f"{'POS' if s['is_positive'] else 'NEG'}")
-        cv2.putText(vis, label, (8, 24), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.65, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(vis, label, (8, 24), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.65, (0, 0, 0),     1, cv2.LINE_AA)
-        cv2.imwrite(str(vis_dir / f"{stem}.png"), vis)
+        if args.visualize:
+            vis = make_overlay(s["path"], s["pred"])
+            label = (f"conf={s['confidence']:.2f}  "
+                     f"fg={s['fg_ratio']*100:.1f}%  "
+                     f"{'POS' if s['is_positive'] else 'NEG'}")
+            cv2.putText(vis, label, (8, 24), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.65, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(vis, label, (8, 24), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.65, (0, 0, 0),     1, cv2.LINE_AA)
+            cv2.imwrite(str(vis_dir / f"{stem}.png"), vis)
 
     if args.save_rejected:
         logger.info("Saving rejected samples …")
@@ -498,12 +540,13 @@ def main():
     # --------------------------------------------------- stats.json
     def _sample_record(s, status):
         return {
-            "file":        Path(s["path"]).name,
-            "status":      status,
-            "confidence":  round(s["confidence"], 6),
-            "fg_ratio":    round(s["fg_ratio"],   6),
-            "fg_pixels":   s["fg_pixels"],
-            "is_positive": s["is_positive"],
+            "file":          Path(s["path"]).name,
+            "original_path": s["path"],   # kept for --refilter without image copy
+            "status":        status,
+            "confidence":    round(s["confidence"], 6),
+            "fg_ratio":      round(s["fg_ratio"],   6),
+            "fg_pixels":     s["fg_pixels"],
+            "is_positive":   s["is_positive"],
         }
 
     records = (
@@ -550,13 +593,14 @@ def main():
         json.dump({"summary": summary, "samples": records}, f, indent=2)
 
     dist_str = "\n".join(reversed(bucket_lines))   # high → low
+    vis_line = f"\n  Visualizations → {vis_dir}" if args.visualize else ""
     logger.info(
         f"\nDone.\n"
         f"  Accepted : {len(accepted)} "
         f"(pos={len(positives)}, neg={len(neg_keep)})\n"
         f"  Rejected : {len(rejected)}\n"
         f"\nConfidence distribution (high → low):\n{dist_str}\n"
-        f"\n  Visualizations → {vis_dir}\n"
+        f"{vis_line}\n"
         f"  Stats          → {stats_path}\n"
         f"  Pseudo-labels  → {accepted_img_dir.parent}"
     )
