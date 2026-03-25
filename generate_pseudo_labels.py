@@ -265,12 +265,21 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate pseudo-labels with pos/neg balancing."
     )
-    parser.add_argument("--image_dir",      required=True)
-    parser.add_argument("--checkpoint",     required=True)
-    parser.add_argument("--base_model",     required=True,
-                        help="HF model name used only for config/architecture.")
-    parser.add_argument("--num_classes",    type=int, required=True)
-    parser.add_argument("--output_dir",     required=True)
+    parser.add_argument("--image_dir",      default=None,
+                        help="Required for inference mode.")
+    parser.add_argument("--checkpoint",     default=None,
+                        help="Required for inference mode.")
+    parser.add_argument("--base_model",     default=None,
+                        help="HF model name used only for config/architecture. "
+                             "Required for inference mode.")
+    parser.add_argument("--num_classes",    type=int, default=None,
+                        help="Required for inference mode.")
+    parser.add_argument("--output_dir",     required=True,
+                        help="Root output directory. For --refilter, also the "
+                             "source of stats.json and all/ predictions.")
+    parser.add_argument("--refilter_output_dir", default=None,
+                        help="Write re-filtered results here instead of "
+                             "overwriting --output_dir. Only used with --refilter.")
     parser.add_argument("--split",          default="train",
                         help="ConeQuest split name (default: train).")
 
@@ -315,10 +324,15 @@ def main():
     device   = torch.device(args.device)
     out_root = Path(args.output_dir)
 
+    # For refilter: write accepted results to a separate dir if specified
+    write_root = Path(args.refilter_output_dir) if (
+        args.refilter and args.refilter_output_dir
+    ) else out_root
+
     # ------------------------------------------------------------------ dirs
-    accepted_img_dir  = out_root / "data" / args.split / "images"
-    accepted_mask_dir = out_root / "data" / args.split / "masks"
-    vis_dir           = out_root / "visualize"
+    accepted_img_dir  = write_root / "data" / args.split / "images"
+    accepted_mask_dir = write_root / "data" / args.split / "masks"
+    vis_dir           = write_root / "visualize"
     for d in [accepted_img_dir, accepted_mask_dir, vis_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
@@ -340,7 +354,7 @@ def main():
 
     # ============================================================ REFILTER MODE
     if args.refilter:
-        stats_path = out_root / "stats.json"
+        stats_path = out_root / "stats.json"   # always read from original out_root
         if not stats_path.exists():
             raise FileNotFoundError(
                 f"stats.json not found at {stats_path}. "
@@ -377,8 +391,13 @@ def main():
         logger.info(f"Loaded {len(all_samples)} samples from all/ dir.")
     # ============================================================ INFERENCE MODE
     else:
-        if not args.save_all_preds and not hasattr(args, 'checkpoint'):
-            pass  # checkpoint is required arg, argparse handles it
+        missing = [n for n, v in [("--image_dir",  args.image_dir),
+                                   ("--checkpoint", args.checkpoint),
+                                   ("--base_model", args.base_model),
+                                   ("--num_classes",args.num_classes)]
+                   if v is None]
+        if missing:
+            parser.error(f"Inference mode requires: {', '.join(missing)}")
 
         model           = load_model(args.checkpoint, args.base_model,
                                      args.num_classes, device)
@@ -526,7 +545,7 @@ def main():
         "conf_distribution": buckets,
     }
 
-    stats_path = out_root / "stats.json"
+    stats_path = write_root / "stats.json"
     with open(stats_path, "w") as f:
         json.dump({"summary": summary, "samples": records}, f, indent=2)
 
