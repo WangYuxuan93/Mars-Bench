@@ -361,7 +361,7 @@ def main():
 
     logger.info("Phase 1: running inference …")
     for pixel_tensors, paths, orig_hs, orig_ws in tqdm(dataloader, desc="Predict"):
-        orig_sizes = list(zip(orig_hs.tolist(), orig_ws.tolist()))
+        orig_sizes = list(zip(orig_hs, orig_ws))
         preds, conf_maps = predict_batch(model, image_processor,
                                          pixel_tensors, orig_sizes, device)
 
