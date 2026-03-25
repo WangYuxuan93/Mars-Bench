@@ -346,8 +346,7 @@ def main():
     # ------------------------------------------------------------ load model
     model           = load_model(args.checkpoint, args.base_model,
                                  args.num_classes, device)
-    image_processor = Mask2FormerImageProcessor(ignore_index=255,
-                                                reduce_labels=False)
+    image_processor = Mask2FormerImageProcessor(ignore_index=255)
 
     dataset    = UnlabeledImageDataset(args.image_dir, args.input_size)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
@@ -367,17 +366,16 @@ def main():
 
         for path, pred, conf_map in zip(paths, preds, conf_maps):
             stats = compute_sample_stats(pred, conf_map, args.fg_class_id)
+            if args.save_confidence:
+                save_confidence_map(conf_map,
+                                    conf_dir / f"{Path(path).stem}.png")
             all_samples.append({
                 "path":      path,
                 "stem":      Path(path).stem,
                 "pred":      pred,
-                "conf_map":  conf_map,
+                # conf_map is large (float32 H×W); only keep scalar confidence
                 **stats,
             })
-
-            if args.save_confidence:
-                save_confidence_map(conf_map,
-                                    conf_dir / f"{Path(path).stem}.png")
 
     # ---------------------------------- Phase 2: quality filter + balancing
     logger.info("Phase 2: filtering and balancing …")
@@ -400,8 +398,6 @@ def main():
         n_neg_max = int(n_pos * args.neg_pos_ratio)
         neg_keep  = random.sample(negatives, min(len(negatives), n_neg_max))
 
-    neg_drop = [s for s in negatives if s not in set(map(id, neg_keep))]
-    # (use id-based membership for speed)
     neg_keep_ids = {id(s) for s in neg_keep}
     neg_drop     = [s for s in negatives if id(s) not in neg_keep_ids]
 
