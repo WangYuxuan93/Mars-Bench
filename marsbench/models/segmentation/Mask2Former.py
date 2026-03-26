@@ -2,6 +2,7 @@
 Mask2Former model implementation for Mars surface image segmentation.
 """
 
+import glob
 import logging
 
 import torch
@@ -22,6 +23,56 @@ class Mask2Former(BaseSegmentationModel):
             reduce_labels=False,
         )
 
+    # ------------------------------------------------------------------
+    # Backbone checkpoint loading (SwinForMaskedImageModeling / MIMWithDistill)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _load_swin_backbone(model, ckpt_path: str):
+        """Replace Mask2Former's Swin backbone with weights from a MIM checkpoint.
+
+        Supports:
+        - MIMWithDistill checkpoints  (keys start with "student.swin.")
+        - Plain SwinForMaskedImageModeling checkpoints  (keys start with "swin.")
+        - A directory – the first .safetensors / pytorch_model.bin found is used.
+        """
+        import os
+
+        # Resolve directory → weight file
+        if os.path.isdir(ckpt_path):
+            candidates = (
+                glob.glob(os.path.join(ckpt_path, "model.safetensors"))
+                + glob.glob(os.path.join(ckpt_path, "pytorch_model.bin"))
+            )
+            if not candidates:
+                raise FileNotFoundError(f"No weight file found in {ckpt_path}")
+            ckpt_path = candidates[0]
+
+        if ckpt_path.endswith(".safetensors"):
+            from safetensors.torch import load_file
+            raw_sd = load_file(ckpt_path, device="cpu")
+        else:
+            raw_sd = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+
+        # Strip wrapper prefix and keep only swin.* keys
+        if any(k.startswith("student.") for k in raw_sd):
+            raw_sd = {k[len("student."):]: v for k, v in raw_sd.items()
+                      if k.startswith("student.")}
+
+        swin_sd = {k[len("swin."):]: v for k, v in raw_sd.items()
+                   if k.startswith("swin.")}
+
+        if not swin_sd:
+            raise ValueError("No 'swin.*' keys found in checkpoint – is this a Swin MIM checkpoint?")
+
+        # Target: model.model.pixel_level_module.encoder.model
+        backbone = model.model.pixel_level_module.encoder.model
+        result = backbone.load_state_dict(swin_sd, strict=False)
+        logger.info(
+            f"Loaded Swin backbone from {ckpt_path}\n"
+            f"  missing : {result.missing_keys[:10]}\n"
+            f"  unexpected: {result.unexpected_keys[:10]}"
+        )
+
     def _initialize_model(self):
         pretrained = self.cfg.model.pretrained
         freeze_layers = self.cfg.model.freeze_layers
@@ -31,6 +82,11 @@ class Mask2Former(BaseSegmentationModel):
             num_labels=self.cfg.data.num_classes,
             ignore_mismatched_sizes=True,
         )
+
+        # Optionally replace backbone with a domain-pretrained Swin checkpoint
+        backbone_ckpt = self.cfg.model.get("backbone_checkpoint", None)
+        if backbone_ckpt:
+            self._load_swin_backbone(model, backbone_ckpt)
 
         if freeze_layers and not pretrained:
             logger.warning("freeze_layers is True but model is not pretrained – setting freeze_layers to False")

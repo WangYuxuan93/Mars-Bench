@@ -1,0 +1,15 @@
+name: DINOv2Segmentation
+class_path: marsbench.models.segmentation.DINOv2Segmentation
+
+# HF model name – options:
+#   facebook/dinov2-small   (21M params backbone)
+#   facebook/dinov2-base    (86M)
+#   facebook/dinov2-large   (307M)
+#   facebook/dinov2-giant   (1.1B)
+model_name: facebook/dinov2-large
+
+input_size: [3, 518, 518]   # DINOv2 was trained at 518×518 (14-px patch grid)
+                             # Use 224/448/518 – must be divisible by 14
+
+pretrained: true
+freeze_layers: false         # true = backbone frozen, decode head only

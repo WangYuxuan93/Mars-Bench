@@ -14,6 +14,7 @@ from .classification import ViT
 from .detection import SSD
 from .detection import FasterRCNN
 from .detection import RetinaNet
+from .segmentation import DINOv2Segmentation
 from .segmentation import DPT
 from .segmentation import DeepLab
 from .segmentation import Mask2Former
@@ -40,6 +41,7 @@ MODEL_REGISTRY = {
         "Mask2Former": Mask2Former,
         "DPT": DPT,
         "transformersDPT": TransformersDPT,
+        "DINOv2Segmentation": DINOv2Segmentation,
         #"ViTMAE": ViTMAESemSeg,
     },
     "detection": {
