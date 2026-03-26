@@ -318,7 +318,7 @@ def main():
 
     # Inference
     parser.add_argument("--per_gpu_batch_size",  type=int, default=8,
-                        help="Batch size per GPU (total = batch_size × num_gpus).")
+                        help="Batch size per GPU.")
     parser.add_argument("--input_size",  type=int, default=512)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--prefetch_factor", type=int, default=4,
@@ -330,6 +330,12 @@ def main():
                              "slow first batch).")
     parser.add_argument("--device",
                         default="cuda" if torch.cuda.is_available() else "cpu")
+    # Multi-GPU via data sharding (one process per GPU)
+    parser.add_argument("--shard_id",   type=int, default=0,
+                        help="Index of this shard/process (0-based).")
+    parser.add_argument("--num_shards", type=int, default=1,
+                        help="Total number of shards (= number of GPUs). "
+                             "Each process handles images[shard_id::num_shards].")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -429,24 +435,19 @@ def main():
         if args.fp16:
             model = model.half()
             logger.info("Model cast to float16.")
-        n_gpus = torch.cuda.device_count() if device.type == "cuda" else 1
-        if device.type == "cuda" and n_gpus > 1:
-            model = torch.nn.DataParallel(model)
-            logger.info(f"Using {n_gpus} GPUs via DataParallel.")
-            if args.compile:
-                logger.warning("--compile is disabled when using multiple GPUs "
-                               "(torch.compile + DataParallel conflict).")
-        elif args.compile:
+        if args.compile:
             model = torch.compile(model)
             logger.info("Model compiled with torch.compile.")
         image_processor = Mask2FormerImageProcessor(ignore_index=255)
 
-        total_batch = args.per_gpu_batch_size * n_gpus
-        logger.info(f"batch_size per GPU={args.per_gpu_batch_size}, "
-                    f"total batch={total_batch} ({n_gpus} GPU(s))")
-        dataset    = UnlabeledImageDataset(args.image_dir, args.input_size)
+        dataset = UnlabeledImageDataset(args.image_dir, args.input_size)
+        # Data sharding for multi-GPU (one process per GPU)
+        if args.num_shards > 1:
+            dataset.paths = dataset.paths[args.shard_id::args.num_shards]
+            logger.info(f"Shard {args.shard_id}/{args.num_shards}: "
+                        f"{len(dataset.paths)} images")
         dataloader = DataLoader(
-            dataset, batch_size=total_batch, shuffle=False,
+            dataset, batch_size=args.per_gpu_batch_size, shuffle=False,
             num_workers=args.num_workers, collate_fn=collate_fn,
             pin_memory=(args.device == "cuda"),
             prefetch_factor=args.prefetch_factor if args.num_workers > 0 else None,
@@ -604,7 +605,10 @@ def main():
         "conf_distribution": buckets,
     }
 
-    stats_path = write_root / "stats.json"
+    # Use shard-specific filename when sharding, so parallel processes don't overwrite each other.
+    # Run merge_stats.py afterwards to combine into a single stats.json.
+    shard_suffix = f"_shard{args.shard_id}" if args.num_shards > 1 else ""
+    stats_path = write_root / f"stats{shard_suffix}.json"
     with open(stats_path, "w") as f:
         json.dump({"summary": summary, "samples": records}, f, indent=2)
 
