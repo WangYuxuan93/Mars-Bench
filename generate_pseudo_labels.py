@@ -466,15 +466,18 @@ def main():
                 if args.save_confidence:
                     save_confidence_map(conf_map,
                                         conf_dir / f"{Path(path).stem}.png")
+                stem = Path(path).stem
                 if args.save_all_preds:
-                    stem = Path(path).stem
-                    # Only save mask; record original image path to avoid
-                    # copying 10M images (saves time and disk space)
+                    # Save mask to disk immediately; do NOT keep numpy array
+                    # in memory (10M × 256KB = ~2.5TB RAM otherwise).
                     save_mask(pred, all_mask_dir / f"{stem}.png")
+                    pred_in_mem = None
+                else:
+                    pred_in_mem = pred
                 all_samples.append({
                     "path":      path,
-                    "stem":      Path(path).stem,
-                    "pred":      pred,
+                    "stem":      stem,
+                    "pred":      pred_in_mem,   # None when save_all_preds
                     **stats,
                 })
 
@@ -519,11 +522,17 @@ def main():
     logger.info("Phase 3: saving accepted samples …")
     for s in tqdm(accepted, desc="Save accepted"):
         stem = s["stem"]
+        # Load pred from disk if it was not kept in memory
+        pred = s["pred"]
+        if pred is None:
+            pred = cv2.imread(str(all_mask_dir / f"{stem}.png"),
+                              cv2.IMREAD_GRAYSCALE)
+
         save_image_copy(s["path"], accepted_img_dir  / f"{stem}.png")
-        save_mask(s["pred"],       accepted_mask_dir / f"{stem}.png")
+        save_mask(pred,            accepted_mask_dir / f"{stem}.png")
 
         if args.visualize:
-            vis = make_overlay(s["path"], s["pred"])
+            vis = make_overlay(s["path"], pred)
             label = (f"conf={s['confidence']:.2f}  "
                      f"fg={s['fg_ratio']*100:.1f}%  "
                      f"{'POS' if s['is_positive'] else 'NEG'}")
@@ -537,8 +546,12 @@ def main():
         logger.info("Saving rejected samples …")
         for s in tqdm(rejected, desc="Save rejected"):
             stem = s["stem"]
+            pred = s["pred"]
+            if pred is None:
+                pred = cv2.imread(str(all_mask_dir / f"{stem}.png"),
+                                  cv2.IMREAD_GRAYSCALE)
             save_image_copy(s["path"], rej_img_dir  / f"{stem}.png")
-            save_mask(s["pred"],       rej_mask_dir / f"{stem}.png")
+            save_mask(pred,            rej_mask_dir / f"{stem}.png")
 
     # --------------------------------------------------- stats.json
     def _sample_record(s, status):
