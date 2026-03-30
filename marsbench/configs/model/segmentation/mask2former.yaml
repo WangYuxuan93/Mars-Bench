@@ -1,6 +1,9 @@
 name: Mask2Former
 class_path: marsbench.models.segmentation.Mask2Former
-model_name: facebook/mask2former-swin-tiny-ade-semantic
+#model_name: mfaytin/mask2former-satellite
+#model_name: facebook/mask2former-swin-base-ade-semantic
+model_name: facebook/mask2former-swin-large-ade-semantic
+#model_name: facebook/mask2former-swin-base-IN21k-ade-semantic
 input_size: [3, 512, 512]
 status: test
 pretrained: true
