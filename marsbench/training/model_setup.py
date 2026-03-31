@@ -7,7 +7,6 @@ import os
 
 import hydra
 import pytorch_lightning as pl
-import torch
 from omegaconf import DictConfig
 
 from marsbench.models import import_model_class
@@ -22,17 +21,20 @@ def setup_model(cfg: DictConfig) -> pl.LightningModule:
     Returns:
         Initialized model
     """
-    # PyTorch 2.6+ requires explicitly allowlisting non-tensor globals in checkpoints.
-    # Lightning checkpoints embed OmegaConf objects, so we allowlist all common ones.
+    # PyTorch 2.6+ changed torch.load default to weights_only=True, which breaks
+    # Lightning checkpoints that embed OmegaConf objects. Patch pl_load to use
+    # weights_only=False (safe here since we only load our own checkpoints).
     try:
-        from omegaconf import DictConfig, ListConfig
-        from omegaconf.base import ContainerMetadata, Metadata
-        from omegaconf.nodes import AnyNode, IntegerNode, FloatNode, BooleanNode, StringNode, EnumNode
-        torch.serialization.add_safe_globals([
-            DictConfig, ListConfig,
-            ContainerMetadata, Metadata,
-            AnyNode, IntegerNode, FloatNode, BooleanNode, StringNode, EnumNode,
-        ])
+        import lightning_fabric.utilities.cloud_io as _cloud_io
+        import functools
+        _orig_load = _cloud_io._load
+
+        @functools.wraps(_orig_load)
+        def _patched_load(path, map_location=None, **kwargs):
+            kwargs["weights_only"] = False
+            return _orig_load(path, map_location=map_location, **kwargs)
+
+        _cloud_io._load = _patched_load
     except Exception:
         pass
     # Import the model class based on configuration
