@@ -44,8 +44,9 @@ def setup_model(cfg: DictConfig) -> pl.LightningModule:
             # Use the model class to load the checkpoint
             model = model_class.load_from_checkpoint(checkpoint_path, cfg=cfg)
             # Update model name to reflect checkpoint usage
+            # Keep the original model name so collate_fn detection still works
             ckpt_base_name = os.path.basename(cfg.checkpoint_path).split(".")[0]
-            cfg.model.name = f"ckpt_{ckpt_base_name}"
+            log.info(f"Loaded checkpoint: {ckpt_base_name}")
         except Exception as e:
             log.error(f"Failed to load from checkpoint: {e}")
             raise
