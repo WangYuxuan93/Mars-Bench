@@ -7,6 +7,7 @@ import os
 
 import hydra
 import pytorch_lightning as pl
+import torch
 from omegaconf import DictConfig
 
 from marsbench.models import import_model_class
@@ -15,6 +16,12 @@ log = logging.getLogger(__name__)
 
 
 def setup_model(cfg: DictConfig) -> pl.LightningModule:
+    # PyTorch 2.6+ requires explicitly allowlisting non-tensor globals in checkpoints
+    try:
+        from omegaconf import DictConfig as OmegaDictConfig, ListConfig
+        torch.serialization.add_safe_globals([OmegaDictConfig, ListConfig])
+    except Exception:
+        pass
     """Set up model based on configuration.
     Args:
         cfg: Configuration object
