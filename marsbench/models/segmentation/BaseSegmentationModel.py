@@ -213,7 +213,7 @@ class BaseSegmentationModel(LightningModule, ABC):
 
         preds = logits.argmax(1).detach()
         metrics.update(preds, gt.detach())
-        self.log(f"{phase}/loss", loss, on_step=True, prog_bar=(phase == "train"))
+        self.log(f"{phase}/loss", loss, on_step=True, prog_bar=(phase == "train"), sync_dist=True)
         if self.current_epoch % self.vis_every == 0 or self.current_epoch == self.trainer.max_epochs - 1:
             self._store_vis(phase, imgs, gt, preds)
         return loss
@@ -278,16 +278,17 @@ class BaseSegmentationModel(LightningModule, ABC):
             phase, metric_name = full_key.split("/", 1)
             if tensor.ndim == 1 and tensor.numel() == C:
                 mean_val = self.safe_macro_mean(tensor)
-                self.log(f"{phase}/{metric_name}", mean_val, on_step=False, on_epoch=True)
+                self.log(f"{phase}/{metric_name}", mean_val, on_step=False, on_epoch=True, sync_dist=True)
                 for i, val in enumerate(tensor):
                     self.log(
                         f"{phase}_class/{metric_name}_{get_class_name(i, self.cfg)}",
                         val if torch.isfinite(val) else -1.0,
                         on_step=False,
                         on_epoch=True,
+                        sync_dist=True,
                     )
             else:
-                self.log(full_key, tensor, on_step=False, on_epoch=True)
+                self.log(full_key, tensor, on_step=False, on_epoch=True, sync_dist=True)
         coll.reset()
 
     def _log_metrics_table(self, phase):
