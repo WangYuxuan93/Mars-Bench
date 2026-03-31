@@ -22,21 +22,18 @@ def setup_model(cfg: DictConfig) -> pl.LightningModule:
         Initialized model
     """
     # PyTorch 2.6+ changed torch.load default to weights_only=True, which breaks
-    # Lightning checkpoints that embed OmegaConf objects. Patch pl_load to use
-    # weights_only=False (safe here since we only load our own checkpoints).
-    try:
-        import lightning_fabric.utilities.cloud_io as _cloud_io
-        import functools
-        _orig_load = _cloud_io._load
+    # Lightning checkpoints that embed OmegaConf objects. Patch torch.load to
+    # force weights_only=False (safe here since we only load our own checkpoints).
+    import functools
+    import torch
+    _orig_torch_load = torch.load
 
-        @functools.wraps(_orig_load)
-        def _patched_load(path, map_location=None, **kwargs):
-            kwargs["weights_only"] = False
-            return _orig_load(path, map_location=map_location, **kwargs)
+    @functools.wraps(_orig_torch_load)
+    def _patched_torch_load(*args, **kwargs):
+        kwargs["weights_only"] = False
+        return _orig_torch_load(*args, **kwargs)
 
-        _cloud_io._load = _patched_load
-    except Exception:
-        pass
+    torch.load = _patched_torch_load
     # Import the model class based on configuration
     model_class = import_model_class(cfg)
     # Load weights from checkpoint if specified
