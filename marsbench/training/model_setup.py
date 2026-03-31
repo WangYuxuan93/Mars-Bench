@@ -16,18 +16,25 @@ log = logging.getLogger(__name__)
 
 
 def setup_model(cfg: DictConfig) -> pl.LightningModule:
-    # PyTorch 2.6+ requires explicitly allowlisting non-tensor globals in checkpoints
-    try:
-        from omegaconf import DictConfig as OmegaDictConfig, ListConfig
-        torch.serialization.add_safe_globals([OmegaDictConfig, ListConfig])
-    except Exception:
-        pass
     """Set up model based on configuration.
     Args:
         cfg: Configuration object
     Returns:
         Initialized model
     """
+    # PyTorch 2.6+ requires explicitly allowlisting non-tensor globals in checkpoints.
+    # Lightning checkpoints embed OmegaConf objects, so we allowlist all common ones.
+    try:
+        from omegaconf import DictConfig, ListConfig
+        from omegaconf.base import ContainerMetadata, Metadata
+        from omegaconf.nodes import AnyNode, IntegerNode, FloatNode, BooleanNode, StringNode, EnumNode
+        torch.serialization.add_safe_globals([
+            DictConfig, ListConfig,
+            ContainerMetadata, Metadata,
+            AnyNode, IntegerNode, FloatNode, BooleanNode, StringNode, EnumNode,
+        ])
+    except Exception:
+        pass
     # Import the model class based on configuration
     model_class = import_model_class(cfg)
     # Load weights from checkpoint if specified
