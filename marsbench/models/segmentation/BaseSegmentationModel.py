@@ -272,23 +272,26 @@ class BaseSegmentationModel(LightningModule, ABC):
 
     @torch.no_grad()
     def _emit(self, coll: MetricCollection):
+        # compute() internally calls AllGather/AllReduce across ranks (torchmetrics DDP sync).
+        # Do NOT pass sync_dist=True to self.log() afterwards — that would trigger a second
+        # collective and cause rank-sequence mismatch leading to NCCL timeout.
         out = coll.compute()
         C = self.cfg.data.num_classes
         for full_key, tensor in out.items():
             phase, metric_name = full_key.split("/", 1)
             if tensor.ndim == 1 and tensor.numel() == C:
                 mean_val = self.safe_macro_mean(tensor)
-                self.log(f"{phase}/{metric_name}", mean_val, on_step=False, on_epoch=True, sync_dist=True)
+                self.log(f"{phase}/{metric_name}", mean_val, on_step=False, on_epoch=True, sync_dist=False)
                 for i, val in enumerate(tensor):
                     self.log(
                         f"{phase}_class/{metric_name}_{get_class_name(i, self.cfg)}",
                         val if torch.isfinite(val) else -1.0,
                         on_step=False,
                         on_epoch=True,
-                        sync_dist=True,
+                        sync_dist=False,
                     )
             else:
-                self.log(full_key, tensor, on_step=False, on_epoch=True, sync_dist=True)
+                self.log(full_key, tensor, on_step=False, on_epoch=True, sync_dist=False)
         coll.reset()
 
     def _log_metrics_table(self, phase):
@@ -377,6 +380,10 @@ class BaseSegmentationModel(LightningModule, ABC):
     @torch.no_grad()
     def _log_vis_grid(self, phase):
         """Create a 4-panel grid per sample and log via W&B / TensorBoard."""
+        # Only rank 0 should do visualization I/O to avoid stalling other ranks.
+        if not self.trainer.is_global_zero:
+            self.vis_samples.pop(phase, None)
+            return
         if phase not in self.vis_samples:
             return
         imgs, gt, preds = self.vis_samples.pop(phase)
