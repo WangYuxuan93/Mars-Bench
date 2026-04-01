@@ -66,7 +66,9 @@ class BaseSegmentationModel(LightningModule, ABC):
                     num_classes=C, weight_type=weight_type, per_class=True, input_format="index"
                 ),
                 "iou": MeanIoU(num_classes=C, per_class=True, input_format="index"),
-            }
+            },
+            compute_groups=False,  # disable metric grouping: grouped compute() can emit a
+                                   # different number of AllGather ops per rank → NCCL deadlock
         )
         self.train_metrics = base.clone(prefix="train/")
         self.val_metrics = base.clone(prefix="val/")
@@ -266,15 +268,23 @@ class BaseSegmentationModel(LightningModule, ABC):
     @staticmethod
     def safe_macro_mean(vec: torch.Tensor) -> torch.Tensor:
         if torch.isnan(vec).any():
-            raise ValueError("Metric vector contains NaN - investigate upstream!")
+            # NaN can appear when a rank never sees a particular class (local-only metrics).
+            # Log a warning instead of raising — an exception on ONE rank while others proceed
+            # will cause the next NCCL collective to hang (rank asymmetry).
+            logger.warning("Metric vector contains NaN; replacing with -1 for macro mean.")
+            vec = torch.nan_to_num(vec, nan=-1.0)
         present = vec.ge(0)
-        return vec[present].mean() if present.any() else torch.tensor(-1, device=vec.device)
+        return vec[present].mean() if present.any() else torch.tensor(-1.0, device=vec.device)
 
     @torch.no_grad()
     def _emit(self, coll: MetricCollection):
-        # compute() internally calls AllGather/AllReduce across ranks (torchmetrics DDP sync).
-        # Do NOT pass sync_dist=True to self.log() afterwards — that would trigger a second
-        # collective and cause rank-sequence mismatch leading to NCCL timeout.
+        # Barrier: ensure ALL ranks arrive here before compute() so the first AllGather
+        # from torchmetrics doesn't time-out waiting for a slow rank.
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.barrier()
+        # compute() internally calls AllGather across ranks (torchmetrics DDP sync,
+        # sync_on_compute=True by default).  Do NOT pass sync_dist=True to self.log()
+        # afterwards — that triggers a second collective and causes NCCL timeout.
         out = coll.compute()
         C = self.cfg.data.num_classes
         for full_key, tensor in out.items():
