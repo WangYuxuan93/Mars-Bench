@@ -1,0 +1,60 @@
+name: MultitaskMask2Former
+class_path: marsbench.models.segmentation.MultitaskMask2Former
+
+# Pretrained Mask2Former backbone to load from HuggingFace
+model_name: facebook/mask2former-swin-large-ade-semantic
+
+# Input channels (3 = RGB)
+in_channels: 3
+
+# Set to true to freeze the Swin encoder
+freeze_backbone: false
+
+# Optional: path to a MIM-pretrained Swin checkpoint (same format as Mask2Former)
+# backbone_checkpoint: /path/to/mim_checkpoint.safetensors
+
+# ------------------------------------------------------------------
+# Task list.  Each entry defines one segmentation task.
+# Fields:
+#   name        – unique string identifier, used as metric prefix and dict key
+#   num_classes – number of semantic classes (excluding background "no-object")
+#   data        – data config block (same fields as a standard data yaml)
+# ------------------------------------------------------------------
+tasks:
+  - name: conequest_segmentation
+    num_classes: 2
+    data:
+      name: ConeQuest_Segmentation
+      load_from_hf: true
+      repo_id: "Mirali33/mb-conequest_seg"
+      image_type: rgb
+      num_classes: 2
+      task: segmentation
+      valid_image_extensions: ${data.valid_image_extensions}
+      split: ${data.split}
+
+  # ---------- Example B: HuggingFace data ----------
+  - name: crater_binary_segmentation
+    num_classes: 2
+    data:
+      name: Crater_Binary_Segmentation
+      load_from_hf: true
+      repo_id: "Mirali33/mb-crater_binary_seg"
+      image_type: rgb
+      num_classes: 2
+      task: segmentation
+      valid_image_extensions: ${data.valid_image_extensions}
+      split: ${data.split}
+
+  # ---------- More tasks (uncomment and fill in): ----------
+  # - name: s5mars
+  #   num_classes: 10
+  #   data:
+  #     name: S5Mars
+  #     load_from_hf: true
+  #     repo_id: "Mirali33/mb-s5mars"
+  #     image_type: rgb
+  #     num_classes: 10
+  #     task: segmentation
+  #     valid_image_extensions: ${data.valid_image_extensions}
+  #     split: ${data.split}

@@ -1,0 +1,41 @@
+# Training config for MultitaskMask2Former
+# Use with MultiTaskDataModule (see multitask_mask2former.py)
+
+batch_size: 8
+num_workers: 4
+ignore_index: -100
+
+# monitor_on uses the first task's val loss by default; adjust as needed
+monitor_on: val_conequest_segmentation/loss
+
+optimizer:
+  name: AdamW
+  lr: 1e-4
+  weight_decay: 0.01
+
+scheduler:
+  name: cosine
+  enabled: true
+  t_max: 100
+  eta_min: 1e-6
+
+# NOTE: Mask2Former uses its own internal Hungarian-matching loss.
+# The criterion block below is only used for metric weight_type.
+criterion:
+  name: cross_entropy          # ignored by MultitaskMask2Former
+  weight_type: square          # used by MetricCollection (GeneralizedDiceScore)
+
+early_stopping_patience: 20
+
+trainer:
+  max_epochs: 100
+  accelerator: auto
+  devices: auto
+  strategy: auto
+  sync_batchnorm: true
+  precision: '32'
+  enable_checkpointing: true
+  enable_progress_bar: true
+  log_every_n_steps: 10
+  num_nodes: 1
+  accumulate_grad_batches: 1

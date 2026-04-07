@@ -18,6 +18,7 @@ from .segmentation import DINOv2Segmentation
 from .segmentation import DPT
 from .segmentation import DeepLab
 from .segmentation import Mask2Former
+from .segmentation import MultitaskMask2Former
 from .segmentation import Segformer
 from .segmentation import UNet
 #from .segmentation import ViTMAESemSeg
@@ -39,6 +40,7 @@ MODEL_REGISTRY = {
         "DeepLab": DeepLab,
         "Segformer": Segformer,
         "Mask2Former": Mask2Former,
+        "MultitaskMask2Former": MultitaskMask2Former,
         "DPT": DPT,
         "transformersDPT": TransformersDPT,
         "DINOv2Segmentation": DINOv2Segmentation,
