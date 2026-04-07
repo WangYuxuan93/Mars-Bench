@@ -485,7 +485,10 @@ class MultitaskMask2Former(pl.LightningModule):
 
         # -- task head --
         class_queries_logits = self.task_heads[task_id](seq_out)  # [B, Q, C+1]
-        masks_queries_logits = model_out.masks_queries_logits      # [B, Q, H/4, W/4]
+        # In this version of transformers, masks_queries_logits is a tuple of per-layer
+        # predictions (one tensor per decoder layer). Take the last (final) layer only.
+        _mql = model_out.masks_queries_logits
+        masks_queries_logits = _mql[-1] if isinstance(_mql, tuple) else _mql  # [B, Q, H/4, W/4]
 
         # -- loss --
         loss = None
