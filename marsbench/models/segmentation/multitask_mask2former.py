@@ -207,10 +207,13 @@ class MultiTaskDataModule(pl.LightningDataModule):
         train_tagged, val_tagged, test_tagged = [], [], []
 
         for task_cfg in self.task_cfgs:
-            # Build a per-task cfg: merge task data config over global data config
-            per_cfg = deepcopy(self.cfg)
-            OmegaConf.update(per_cfg, "data", OmegaConf.to_container(task_cfg.data, resolve=True),
-                             merge=True)
+            # Build a per-task cfg by merging task data config over global config.
+            # Convert to plain dict first to drop Hydra's struct flag (which forbids new keys
+            # like load_from_hf / repo_id that aren't in the global data schema).
+            base_dict = OmegaConf.to_container(self.cfg, resolve=False, throw_on_missing=False)
+            task_data_dict = OmegaConf.to_container(task_cfg.data, resolve=True)
+            base_dict["data"] = {**base_dict.get("data", {}), **task_data_dict}
+            per_cfg = OmegaConf.create(base_dict)
 
             transforms = get_transforms(per_cfg)
             use_hf = task_cfg.data.get("load_from_hf", False)
