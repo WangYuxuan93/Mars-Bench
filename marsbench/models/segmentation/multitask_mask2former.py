@@ -537,12 +537,14 @@ class MultitaskMask2Former(pl.LightningModule):
         loss = outputs.loss
 
         # Post-process → dense predictions for metrics
-        target_sizes = [(512, 512)] * len(batch["orig_mask"])
+        # Use actual target size (may differ per dataset, e.g. HF datasets use 224×224)
+        targets = torch.stack(batch["orig_mask"], dim=0).to(self.device).long()
+        h, w = targets.shape[-2:]
+        target_sizes = [(h, w)] * targets.shape[0]
         preds = self.image_processor.post_process_semantic_segmentation(
             outputs, target_sizes=target_sizes
         )
-        preds   = torch.stack(preds).to(self.device)
-        targets = torch.stack(batch["orig_mask"], dim=0).to(self.device).long()
+        preds = torch.stack(preds).to(self.device)
 
         metric_coll.update(preds, targets)
 
