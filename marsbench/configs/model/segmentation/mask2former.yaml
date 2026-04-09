@@ -4,6 +4,7 @@ class_path: marsbench.models.segmentation.Mask2Former
 #model_name: facebook/mask2former-swin-base-ade-semantic
 model_name: facebook/mask2former-swin-large-ade-semantic
 #model_name: facebook/mask2former-swin-base-IN21k-ade-semantic
+backbone_checkpoint: /mnt/si001435mzae/default/yxwang/mars/outputs/swin-large-mask2former-ade-mim-distill-ctx-v0/checkpoint-11157
 input_size: [3, 512, 512]
 status: test
 pretrained: true
