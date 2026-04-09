@@ -64,8 +64,10 @@ class Mask2Former(BaseSegmentationModel):
         if not swin_sd:
             raise ValueError("No 'swin.*' keys found in checkpoint – is this a Swin MIM checkpoint?")
 
-        # Target: model.model.pixel_level_module.encoder.model
-        backbone = model.model.pixel_level_module.encoder.model
+        # New transformers: encoder is SwinBackbone directly (no .model child)
+        # Old transformers: encoder is SwinModel wrapped inside .model
+        encoder = model.model.pixel_level_module.encoder
+        backbone = encoder.model if hasattr(encoder, "model") else encoder
         result = backbone.load_state_dict(swin_sd, strict=False)
         logger.info(
             f"Loaded Swin backbone from {ckpt_path}\n"
