@@ -95,27 +95,44 @@ class Mask2Former(BaseSegmentationModel):
         freeze_layers = self.cfg.model.freeze_layers
         model_name = self.cfg.model.get("model_name", None)
 
+        backbone_ckpt = self.cfg.model.get("backbone_checkpoint", None)
+
         if model_name:
-            # Initialize full Mask2Former (encoder + pixel decoder + transformer decoder)
-            # from a pretrained HuggingFace checkpoint.
+            logger.info(
+                f"[Decoder] Pretrained from HuggingFace: {model_name}\n"
+                f"[Encoder] {'Will be replaced by: ' + backbone_ckpt if backbone_ckpt else 'Using encoder bundled with ' + model_name}"
+            )
             model = Mask2FormerForUniversalSegmentation.from_pretrained(
                 model_name,
                 num_labels=self.cfg.data.num_classes,
                 ignore_mismatched_sizes=True,
             )
         else:
-            # Random initialization: build config from scratch using the base model's
-            # architecture but with random weights.
-            logger.info("model_name is null – initializing Mask2Former with random weights")
+            # Random decoder: derive architecture config from backbone to ensure dim alignment
+            _swin_to_m2f = {
+                "microsoft/swin-large-patch4-window12-384": "facebook/mask2former-swin-large-ade-semantic",
+                "microsoft/swin-base-patch4-window12-384":  "facebook/mask2former-swin-base-ade-semantic",
+                "microsoft/swin-tiny-patch4-window7-224":   "facebook/mask2former-swin-tiny-ade-semantic",
+                "microsoft/swin-small-patch4-window7-224":  "facebook/mask2former-swin-small-ade-semantic",
+            }
             from transformers import Mask2FormerConfig
-            config = Mask2FormerConfig()
+            ref_model = _swin_to_m2f.get(backbone_ckpt, None) if backbone_ckpt else None
+            if ref_model:
+                config = Mask2FormerConfig.from_pretrained(ref_model)
+                logger.info(
+                    f"[Decoder] Random init (architecture config borrowed from {ref_model})\n"
+                    f"[Encoder] Will be replaced by: {backbone_ckpt}"
+                )
+            else:
+                config = Mask2FormerConfig()
+                logger.info(
+                    f"[Decoder] Random init (default swin-base architecture config)\n"
+                    f"[Encoder] {'Will be replaced by: ' + backbone_ckpt if backbone_ckpt else 'Random init'}"
+                )
             config.num_labels = self.cfg.data.num_classes
             model = Mask2FormerForUniversalSegmentation(config)
-            pretrained = False  # nothing was pretrained
+            pretrained = False
 
-        # Optionally replace encoder with a domain-pretrained Swin checkpoint
-        # (local path or HuggingFace model id)
-        backbone_ckpt = self.cfg.model.get("backbone_checkpoint", None)
         if backbone_ckpt:
             self._load_swin_backbone(model, backbone_ckpt)
 
