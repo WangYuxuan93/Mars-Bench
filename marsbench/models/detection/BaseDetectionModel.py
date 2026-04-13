@@ -40,8 +40,7 @@ class BaseDetectionModel(pl.LightningModule, ABC):
         sched_cfg = self.cfg.training.get("scheduler", {})
         logger.info(
             f"[{self.__class__.__name__}] Initialized\n"
-            f"  pretrained     : {self.cfg.model.pretrained}\n"
-            f"  freeze_layers  : {self.cfg.model.freeze_layers}\n"
+            f"  training_type  : {self.cfg.training_type}  (pretrained={self.cfg.model.pretrained}, freeze_layers={self.cfg.model.freeze_layers})\n"
             f"  num_classes    : {self.cfg.data.num_classes}\n"
             f"  optimizer      : {opt_cfg.name}  lr={opt_cfg.lr}  weight_decay={opt_cfg.get('weight_decay', 0.0)}\n"
             f"  scheduler      : {sched_cfg.get('name', 'none')}  enabled={sched_cfg.get('enabled', False)}\n"
