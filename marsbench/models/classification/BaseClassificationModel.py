@@ -97,6 +97,19 @@ class BaseClassificationModel(LightningModule, ABC):
 
         self.test_results = {}
 
+        opt_cfg = self.cfg.training.optimizer
+        sched_cfg = self.cfg.training.get("scheduler", {})
+        logger.info(
+            f"[{self.__class__.__name__}] Initialized\n"
+            f"  pretrained     : {self.cfg.model.pretrained}\n"
+            f"  freeze_layers  : {self.cfg.model.freeze_layers}\n"
+            f"  num_classes    : {cfg.data.num_classes}  subtask: {cfg.data.subtask}\n"
+            f"  optimizer      : {opt_cfg.name}  lr={opt_cfg.lr}  weight_decay={opt_cfg.get('weight_decay', 0.0)}\n"
+            f"  scheduler      : {sched_cfg.get('name', 'none')}  enabled={sched_cfg.get('enabled', False)}\n"
+            f"  max_epochs     : {self.cfg.training.trainer.max_epochs}\n"
+            f"  batch_size     : {self.cfg.training.batch_size}"
+        )
+
     def _get_in_channels(self) -> int:
         """Determine number of input channels based on configuration."""
         input_size = getattr(self.cfg.model, "input_size", None)

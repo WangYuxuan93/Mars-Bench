@@ -2,6 +2,7 @@
 Abstract base class for all Mars surface image detection models.
 """
 
+import logging
 from abc import ABC
 from abc import abstractmethod
 
@@ -15,6 +16,8 @@ from torchmetrics.detection import MeanAveragePrecision
 
 from marsbench.utils.detect_metrics import compute_object_metrics
 from marsbench.utils.detect_metrics import match_bboxes
+
+logger = logging.getLogger(__name__)
 
 
 class BaseDetectionModel(pl.LightningModule, ABC):
@@ -32,6 +35,19 @@ class BaseDetectionModel(pl.LightningModule, ABC):
         self.test_results = {}
 
         self.save_hyperparameters(cfg)
+
+        opt_cfg = self.cfg.training.optimizer
+        sched_cfg = self.cfg.training.get("scheduler", {})
+        logger.info(
+            f"[{self.__class__.__name__}] Initialized\n"
+            f"  pretrained     : {self.cfg.model.pretrained}\n"
+            f"  freeze_layers  : {self.cfg.model.freeze_layers}\n"
+            f"  num_classes    : {self.cfg.data.num_classes}\n"
+            f"  optimizer      : {opt_cfg.name}  lr={opt_cfg.lr}  weight_decay={opt_cfg.get('weight_decay', 0.0)}\n"
+            f"  scheduler      : {sched_cfg.get('name', 'none')}  enabled={sched_cfg.get('enabled', False)}\n"
+            f"  max_epochs     : {self.cfg.training.trainer.max_epochs}\n"
+            f"  batch_size     : {self.cfg.training.batch_size}"
+        )
 
     @abstractmethod
     def _initialize_model(self):
@@ -60,9 +76,7 @@ class BaseDetectionModel(pl.LightningModule, ABC):
         outputs = self(images)
 
         if self.metrics:
-            metric_summary = self._calculate_metrics(outputs, targets)
-            metrics = {"val/map": metric_summary["map"]}
-            self.log_dict(metrics, on_step=True, on_epoch=True, prog_bar=True)
+            self._accumulate_metrics(outputs, targets)
 
         self.model.train()
         loss_dict = self(images, targets)
@@ -73,6 +87,12 @@ class BaseDetectionModel(pl.LightningModule, ABC):
 
     def on_validation_epoch_start(self):
         self.metrics.reset()
+
+    def on_validation_epoch_end(self):
+        if self.metrics:
+            metric_summary = self.metrics.compute()
+            self.log("val/map", metric_summary["map"], on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+            self.metrics.reset()
 
     def on_test_epoch_start(self):
         self.metrics.reset()
@@ -199,7 +219,7 @@ class BaseDetectionModel(pl.LightningModule, ABC):
 
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
-    def _calculate_metrics(self, outputs, targets):
+    def _accumulate_metrics(self, outputs, targets):
         targets_list = []
         preds_list = []
         for output, target in zip(outputs, targets):
@@ -216,5 +236,7 @@ class BaseDetectionModel(pl.LightningModule, ABC):
             preds_list.append(preds_dict)
 
         self.metrics.update(preds_list, targets_list)
-        metric_summary = self.metrics.compute()
-        return metric_summary
+
+    def _calculate_metrics(self, outputs, targets):
+        self._accumulate_metrics(outputs, targets)
+        return self.metrics.compute()
