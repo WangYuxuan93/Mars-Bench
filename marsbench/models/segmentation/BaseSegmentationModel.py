@@ -46,7 +46,7 @@ class BaseSegmentationModel(LightningModule, ABC):
             self.cfg.model.pretrained = False if self.cfg.training_type == "scratch_training" else True
             self.cfg.model.freeze_layers = True if self.cfg.training_type == "feature_extraction" else False
         elif self.cfg.training_type == "finetune":
-            print (f"Training Type is finetune\npretrained: {self.cfg.model.pretrained}, freeze_layers: {self.cfg.model.freeze_layers}")
+            pass
         else:
             raise ValueError(f"Training type '{self.cfg.training_type}' not recognized.")
 
@@ -88,6 +88,19 @@ class BaseSegmentationModel(LightningModule, ABC):
         self.save_hyperparameters(cfg)
 
         self.test_results = {}
+
+        opt_cfg = self.cfg.training.optimizer
+        sched_cfg = self.cfg.training.get("scheduler", {})
+        logger.info(
+            f"[{self.__class__.__name__}] Initialized\n"
+            f"  pretrained     : {self.cfg.model.pretrained}\n"
+            f"  freeze_layers  : {self.cfg.model.freeze_layers}\n"
+            f"  num_classes    : {cfg.data.num_classes}\n"
+            f"  optimizer      : {opt_cfg.name}  lr={opt_cfg.lr}  weight_decay={opt_cfg.get('weight_decay', 0.0)}\n"
+            f"  scheduler      : {sched_cfg.get('name', 'none')}  enabled={sched_cfg.get('enabled', False)}\n"
+            f"  max_epochs     : {self.cfg.training.trainer.max_epochs}\n"
+            f"  batch_size     : {self.cfg.training.batch_size}"
+        )
 
     def _get_in_channels(self) -> int:
         """Determine number of input channels based on configuration."""
@@ -165,7 +178,6 @@ class BaseSegmentationModel(LightningModule, ABC):
 
     # ---------------- optimizer & scheduler ----------------
     def configure_optimizers(self):
-        print ("Optimizer Info:", self.cfg.training)
         opt_name = self.cfg.training.optimizer.name.lower()
         kw = dict(lr=self.cfg.training.optimizer.lr, weight_decay=self.cfg.training.optimizer.get("weight_decay", 0.0))
         if opt_name == "adam":

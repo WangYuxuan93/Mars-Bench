@@ -2,6 +2,7 @@
 Abstract base class for all Mars surface image detection models.
 """
 
+import logging
 from abc import ABC
 from abc import abstractmethod
 
@@ -15,6 +16,8 @@ from torchmetrics.detection import MeanAveragePrecision
 
 from marsbench.utils.detect_metrics import compute_object_metrics
 from marsbench.utils.detect_metrics import match_bboxes
+
+logger = logging.getLogger(__name__)
 
 
 class BaseDetectionModel(pl.LightningModule, ABC):
@@ -32,6 +35,19 @@ class BaseDetectionModel(pl.LightningModule, ABC):
         self.test_results = {}
 
         self.save_hyperparameters(cfg)
+
+        opt_cfg = self.cfg.training.optimizer
+        sched_cfg = self.cfg.training.get("scheduler", {})
+        logger.info(
+            f"[{self.__class__.__name__}] Initialized\n"
+            f"  pretrained     : {self.cfg.model.pretrained}\n"
+            f"  freeze_layers  : {self.cfg.model.freeze_layers}\n"
+            f"  num_classes    : {self.cfg.data.num_classes}\n"
+            f"  optimizer      : {opt_cfg.name}  lr={opt_cfg.lr}  weight_decay={opt_cfg.get('weight_decay', 0.0)}\n"
+            f"  scheduler      : {sched_cfg.get('name', 'none')}  enabled={sched_cfg.get('enabled', False)}\n"
+            f"  max_epochs     : {self.cfg.training.trainer.max_epochs}\n"
+            f"  batch_size     : {self.cfg.training.batch_size}"
+        )
 
     @abstractmethod
     def _initialize_model(self):
