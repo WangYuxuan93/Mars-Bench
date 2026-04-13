@@ -60,9 +60,7 @@ class BaseDetectionModel(pl.LightningModule, ABC):
         outputs = self(images)
 
         if self.metrics:
-            metric_summary = self._calculate_metrics(outputs, targets)
-            metrics = {"val/map": metric_summary["map"]}
-            self.log_dict(metrics, on_step=True, on_epoch=True, prog_bar=True)
+            self._accumulate_metrics(outputs, targets)
 
         self.model.train()
         loss_dict = self(images, targets)
@@ -73,6 +71,12 @@ class BaseDetectionModel(pl.LightningModule, ABC):
 
     def on_validation_epoch_start(self):
         self.metrics.reset()
+
+    def on_validation_epoch_end(self):
+        if self.metrics:
+            metric_summary = self.metrics.compute()
+            self.log("val/map", metric_summary["map"], on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+            self.metrics.reset()
 
     def on_test_epoch_start(self):
         self.metrics.reset()
@@ -199,7 +203,7 @@ class BaseDetectionModel(pl.LightningModule, ABC):
 
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
-    def _calculate_metrics(self, outputs, targets):
+    def _accumulate_metrics(self, outputs, targets):
         targets_list = []
         preds_list = []
         for output, target in zip(outputs, targets):
@@ -216,5 +220,7 @@ class BaseDetectionModel(pl.LightningModule, ABC):
             preds_list.append(preds_dict)
 
         self.metrics.update(preds_list, targets_list)
-        metric_summary = self.metrics.compute()
-        return metric_summary
+
+    def _calculate_metrics(self, outputs, targets):
+        self._accumulate_metrics(outputs, targets)
+        return self.metrics.compute()
