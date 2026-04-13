@@ -27,50 +27,65 @@ class Mask2Former(BaseSegmentationModel):
     # Backbone checkpoint loading (SwinForMaskedImageModeling / MIMWithDistill)
     # ------------------------------------------------------------------
     @staticmethod
-    def _load_swin_backbone(model, ckpt_path: str):
-        """Replace Mask2Former's Swin backbone with weights from a MIM checkpoint.
+    def _load_swin_backbone(model, backbone_ckpt: str):
+        """Replace Mask2Former's Swin encoder with weights from a Swin checkpoint.
 
         Supports:
-        - MIMWithDistill checkpoints  (keys start with "student.swin.")
-        - Plain SwinForMaskedImageModeling checkpoints  (keys start with "swin.")
-        - A directory – the first .safetensors / pytorch_model.bin found is used.
+        - HuggingFace model id       (e.g. "microsoft/swin-large-patch4-window12-384")
+        - MIMWithDistill checkpoint  (keys start with "student.swin.")
+        - SwinForMaskedImageModeling (keys start with "swin.")
+        - Bare Swin state dict       (keys have no prefix)
+        - Local directory            (first .safetensors / pytorch_model.bin used)
         """
         import os
 
-        # Resolve directory → weight file
-        if os.path.isdir(ckpt_path):
+        encoder = model.model.pixel_level_module.encoder
+        backbone = encoder.model if hasattr(encoder, "model") else encoder
+
+        # ---- HuggingFace model id (string that is not a local path) ----
+        if not os.path.exists(backbone_ckpt):
+            logger.info(f"Loading Swin encoder from HuggingFace: {backbone_ckpt}")
+            # Use the same class as the backbone to ensure key format matches.
+            # SwinBackbone uses "encoder.stages.*"; SwinModel uses "encoder.layers.*".
+            hf_swin = backbone.__class__.from_pretrained(backbone_ckpt)
+            result = backbone.load_state_dict(hf_swin.state_dict(), strict=False)
+            logger.info(
+                f"Loaded Swin encoder from HuggingFace '{backbone_ckpt}'\n"
+                f"  missing : {result.missing_keys[:10]}\n"
+                f"  unexpected: {result.unexpected_keys[:10]}"
+            )
+            return
+
+        # ---- Local directory → find weight file ----
+        if os.path.isdir(backbone_ckpt):
             candidates = (
-                glob.glob(os.path.join(ckpt_path, "model.safetensors"))
-                + glob.glob(os.path.join(ckpt_path, "pytorch_model.bin"))
+                glob.glob(os.path.join(backbone_ckpt, "model.safetensors"))
+                + glob.glob(os.path.join(backbone_ckpt, "pytorch_model.bin"))
             )
             if not candidates:
-                raise FileNotFoundError(f"No weight file found in {ckpt_path}")
-            ckpt_path = candidates[0]
+                raise FileNotFoundError(f"No weight file found in {backbone_ckpt}")
+            backbone_ckpt = candidates[0]
 
-        if ckpt_path.endswith(".safetensors"):
+        if backbone_ckpt.endswith(".safetensors"):
             from safetensors.torch import load_file
-            raw_sd = load_file(ckpt_path, device="cpu")
+            raw_sd = load_file(backbone_ckpt, device="cpu")
         else:
-            raw_sd = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+            raw_sd = torch.load(backbone_ckpt, map_location="cpu", weights_only=True)
 
-        # Strip wrapper prefix and keep only swin.* keys
+        # Strip wrapper prefixes: MIMWithDistill → student.swin.xxx, MIM → swin.xxx
         if any(k.startswith("student.") for k in raw_sd):
             raw_sd = {k[len("student."):]: v for k, v in raw_sd.items()
                       if k.startswith("student.")}
+        if any(k.startswith("swin.") for k in raw_sd):
+            raw_sd = {k[len("swin."):]: v for k, v in raw_sd.items()
+                      if k.startswith("swin.")}
 
-        swin_sd = {k[len("swin."):]: v for k, v in raw_sd.items()
-                   if k.startswith("swin.")}
+        if not raw_sd:
+            raise ValueError("Empty state dict after stripping prefix – check checkpoint format.")
 
-        if not swin_sd:
-            raise ValueError("No 'swin.*' keys found in checkpoint – is this a Swin MIM checkpoint?")
-
-        # New transformers: encoder is SwinBackbone directly (no .model child)
-        # Old transformers: encoder is SwinModel wrapped inside .model
-        encoder = model.model.pixel_level_module.encoder
-        backbone = encoder.model if hasattr(encoder, "model") else encoder
-        result = backbone.load_state_dict(swin_sd, strict=False)
+        result = backbone.load_state_dict(raw_sd, strict=False)
         logger.info(
-            f"Loaded Swin backbone from {ckpt_path}\n"
+            f"Loaded Swin encoder from {backbone_ckpt}\n"
             f"  missing : {result.missing_keys[:10]}\n"
             f"  unexpected: {result.unexpected_keys[:10]}"
         )
@@ -78,15 +93,46 @@ class Mask2Former(BaseSegmentationModel):
     def _initialize_model(self):
         pretrained = self.cfg.model.pretrained
         freeze_layers = self.cfg.model.freeze_layers
+        model_name = self.cfg.model.get("model_name", None)
 
-        model = Mask2FormerForUniversalSegmentation.from_pretrained(
-            self.cfg.model.model_name,
-            num_labels=self.cfg.data.num_classes,
-            ignore_mismatched_sizes=True,
-        )
-
-        # Optionally replace backbone with a domain-pretrained Swin checkpoint
         backbone_ckpt = self.cfg.model.get("backbone_checkpoint", None)
+
+        if model_name:
+            logger.info(
+                f"[Decoder] Pretrained from HuggingFace: {model_name}\n"
+                f"[Encoder] {'Will be replaced by: ' + backbone_ckpt if backbone_ckpt else 'Using encoder bundled with ' + model_name}"
+            )
+            model = Mask2FormerForUniversalSegmentation.from_pretrained(
+                model_name,
+                num_labels=self.cfg.data.num_classes,
+                ignore_mismatched_sizes=True,
+            )
+        else:
+            # Random decoder: derive architecture config from backbone to ensure dim alignment
+            _swin_to_m2f = {
+                "microsoft/swin-large-patch4-window12-384": "facebook/mask2former-swin-large-ade-semantic",
+                "microsoft/swin-base-patch4-window12-384":  "facebook/mask2former-swin-base-ade-semantic",
+                "microsoft/swin-tiny-patch4-window7-224":   "facebook/mask2former-swin-tiny-ade-semantic",
+                "microsoft/swin-small-patch4-window7-224":  "facebook/mask2former-swin-small-ade-semantic",
+            }
+            from transformers import Mask2FormerConfig
+            ref_model = _swin_to_m2f.get(backbone_ckpt, None) if backbone_ckpt else None
+            if ref_model:
+                config = Mask2FormerConfig.from_pretrained(ref_model)
+                logger.info(
+                    f"[Decoder] Random init (architecture config borrowed from {ref_model})\n"
+                    f"[Encoder] Will be replaced by: {backbone_ckpt}"
+                )
+            else:
+                config = Mask2FormerConfig()
+                logger.info(
+                    f"[Decoder] Random init (default swin-base architecture config)\n"
+                    f"[Encoder] {'Will be replaced by: ' + backbone_ckpt if backbone_ckpt else 'Random init'}"
+                )
+            config.num_labels = self.cfg.data.num_classes
+            model = Mask2FormerForUniversalSegmentation(config)
+            pretrained = False
+
         if backbone_ckpt:
             self._load_swin_backbone(model, backbone_ckpt)
 
@@ -133,12 +179,13 @@ class Mask2Former(BaseSegmentationModel):
 
         loss = outputs.loss
 
-        target_sizes = [(512, 512)] * len(batch["orig_mask"])
+        target_masks = torch.stack(batch["orig_mask"], dim=0).to(self.device).long()
+        h, w = target_masks.shape[-2:]
+        target_sizes = [(h, w)] * target_masks.shape[0]
         pred_indices = self.image_processor.post_process_semantic_segmentation(
             outputs, target_sizes=target_sizes
         )
         pred_indices = torch.stack(pred_indices).to(self.device)
-        target_masks = torch.stack(batch["orig_mask"], dim=0).to(self.device).long()
 
         # update base-class MetricCollection
         metrics = getattr(self, f"{prefix}_metrics")
@@ -166,7 +213,8 @@ class Mask2Former(BaseSegmentationModel):
         images = batch["pixel_values"].to(self.device)
         # no labels needed for inference – call self.model directly
         outputs = self.model(pixel_values=images)
-        target_sizes = [(512, 512)] * images.shape[0]
+        h, w = images.shape[-2:]
+        target_sizes = [(h, w)] * images.shape[0]
         pred_indices = self.image_processor.post_process_semantic_segmentation(
             outputs, target_sizes=target_sizes
         )

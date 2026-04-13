@@ -1,10 +1,23 @@
 name: Mask2Former
 class_path: marsbench.models.segmentation.Mask2Former
+
+# Decoder initialization
+# - Set to a HuggingFace id to load pretrained pixel decoder + transformer decoder
+# - Set to null for random initialization (backbone_checkpoint must be set separately)
 #model_name: mfaytin/mask2former-satellite
 #model_name: facebook/mask2former-swin-base-ade-semantic
-model_name: facebook/mask2former-swin-large-ade-semantic
+#model_name: facebook/mask2former-swin-large-ade-semantic
 #model_name: facebook/mask2former-swin-base-IN21k-ade-semantic
-backbone_checkpoint: /mnt/si001435mzae/default/yxwang/mars/outputs/swin-large-mask2former-ade-mim-distill-ctx-v0/checkpoint-11157
+model_name: null   # random init
+
+# Encoder (Swin backbone) override — optional
+# - Leave unset: use the encoder bundled with model_name above
+# - Local path:  /path/to/mim_checkpoint/  or  /path/to/model.safetensors
+# - HF model id: microsoft/swin-large-patch4-window12-384
+#backbone_checkpoint: null
+backbone_checkpoint: microsoft/swin-large-patch4-window12-384
+#backbone_checkpoint: /mnt/si001435mzae/default/yxwang/mars/outputs/swin-large-mask2former-ade-mim-distill-ctx-v0/checkpoint-11157
+
 input_size: [3, 512, 512]
 status: test
 pretrained: true
