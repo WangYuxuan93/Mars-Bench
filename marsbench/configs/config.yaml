@@ -16,7 +16,7 @@ repo_id: ""                  # Hugging Face repository ID when load_from_hf=True
 
 # Model settings
 model_name: resnet101        # Name of the model architecture
-training_type: finetune  # 'scratch_training', 'feature_extraction', 'transfer_learning'
+training_type: scratch_training  # 'scratch_training', 'feature_extraction', 'transfer_learning', ('finetune' for seg)
 checkpoint_path: null        # Path to a .ckpt file to resume training
 
 # detection model settings

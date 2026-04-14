@@ -2,6 +2,6 @@ name: DPT
 class_path: marsbench.models.segmentation.DPT
 status: test
 encoder_name: tu-vit_base_patch16_224.augreg_in21k
-freeze_layers: true
-pretrained: false
-encoder_checkpoint_path: "/mnt/si001435mzae/default/yxwang/codes/Mars-Bench/pretrained/timm_encoder_from_vitmae-ctx-v0_checkpoint_50200.pth"
+freeze_layers: false
+pretrained: true
+encoder_checkpoint_path: "/mnt/si001435mzae/default/yxwang/codes/Mars-Bench/pretrained/timm_encoder_from_vit-patch16-224-in21k-mim-distil-ctx-v1_checkpoint_4185.pth"

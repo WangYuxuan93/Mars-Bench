@@ -55,6 +55,7 @@ trainer:
   # Optional: any additional trainer args that might be needed
   enable_progress_bar: true
   log_every_n_steps: 10
+  #val_check_interval: 500
 
   # Multi-GPU specific settings
   num_nodes: 1            # number of compute nodes
