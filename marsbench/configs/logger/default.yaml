@@ -7,7 +7,7 @@ max_vis_samples: 3
 wandb:
   enabled: true
   project: "marsbench"
-  name: "${task}-${model_name}-${data_name}-${now:%Y-%m-%d_%H-%M-%S}"
+  name: "${task}-${model_name}-${data_name}-${training_type}-lr${training.optimizer.lr}-${now:%Y-%m-%d_%H-%M-%S}"
   entity: null  # your wandb username/org
   tags: []
   notes: null
