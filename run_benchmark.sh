@@ -144,7 +144,7 @@ for MODEL in $MODELS; do
     echo " [$IDX/$TOTAL] Model: $MODEL"
     echo "================================================================"
 
-    CMD="python -m marsbench.main \
+    CMD="HF_ENDPOINT=https://hf-mirror.com python3 -m marsbench.main \
         task=${TASK} \
         model_name=${MODEL} \
         data_name=${DATA_NAME} \
