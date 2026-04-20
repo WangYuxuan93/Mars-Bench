@@ -116,7 +116,12 @@ class Mask2Former(BaseSegmentationModel):
                 "microsoft/swin-small-patch4-window7-224":  "facebook/mask2former-swin-small-ade-semantic",
             }
             from transformers import Mask2FormerConfig
-            ref_model = _swin_to_m2f.get(backbone_ckpt, None) if backbone_ckpt else None
+            # ref_model: explicit config source (yaml field) > lookup by backbone_ckpt > fallback
+            explicit_ref = self.cfg.model.get("ref_model", None)
+            ref_model = (
+                explicit_ref
+                or (_swin_to_m2f.get(backbone_ckpt, None) if backbone_ckpt else None)
+            )
             if ref_model:
                 config = Mask2FormerConfig.from_pretrained(ref_model)
                 logger.info(
