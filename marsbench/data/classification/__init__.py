@@ -6,6 +6,7 @@ from .Atmospheric_Dust_Classification_RDR import Atmospheric_Dust_Classification
 from .BaseClassificationDataset import BaseClassificationDataset
 from .Change_Classification_CTX import Change_Classification_CTX
 from .Change_Classification_HiRISE import Change_Classification_HiRISE
+from .CTX_Geomorph_Classification import CTX_Geomorph_Classification
 from .DoMars16k import DoMars16k
 from .Frost_Classification import Frost_Classification
 from .Landmark_Classification import Landmark_Classification
@@ -15,6 +16,7 @@ from .HFClassification import HFClassification
 
 __all__ = [
     "BaseClassificationDataset",
+    "CTX_Geomorph_Classification",
     "DoMars16k",
     "Landmark_Classification",
     "Surface_Classification",

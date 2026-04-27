@@ -23,6 +23,7 @@ from .classification import Atmospheric_Dust_Classification_EDR
 from .classification import Atmospheric_Dust_Classification_RDR
 from .classification import Change_Classification_CTX
 from .classification import Change_Classification_HiRISE
+from .classification import CTX_Geomorph_Classification
 from .classification import DoMars16k
 from .classification import Frost_Classification
 from .classification import Landmark_Classification
@@ -47,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 DATASET_REGISTRY = {
     "classification": {
+        "CTX_Geomorph_Classification": CTX_Geomorph_Classification,
         "DoMars16k": DoMars16k,
         "Landmark_Classification": Landmark_Classification,
         "Surface_Classification": Surface_Classification,
