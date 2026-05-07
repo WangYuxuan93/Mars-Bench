@@ -304,6 +304,13 @@ class BaseClassificationModel(LightningModule, ABC):
         ax.axis("off")
         fig.patch.set_facecolor("white")
 
+        import matplotlib.font_manager as fm
+        cjk_candidates = ["Microsoft YaHei", "SimHei", "WenQuanYi Micro Hei", "Noto Sans CJK SC"]
+        font_family = next(
+            (f for f in cjk_candidates
+             if fm.findfont(fm.FontProperties(family=f)) != fm.findfont(fm.FontProperties())),
+            "DejaVu Sans",
+        )
         ax.text(
             0.01,
             0.99,
@@ -313,7 +320,7 @@ class BaseClassificationModel(LightningModule, ABC):
             wrap=True,
             horizontalalignment="left",
             fontsize=font_size,
-            family="DejaVu Sans",
+            family=font_family,
             transform=ax.transAxes,
         )
 
