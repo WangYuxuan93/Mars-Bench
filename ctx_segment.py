@@ -16,13 +16,15 @@ CTX 输入支持：
 """
 
 import argparse
+import atexit
+import io
 import json
 import os
-import sys
-import zipfile
-
-import io
 import re
+import shutil
+import sys
+import tempfile
+import zipfile
 
 import albumentations as A
 import matplotlib.pyplot as plt
@@ -43,12 +45,25 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def get_vsizip_path(ctx_input: str) -> str:
-    """如果是 zip，返回 /vsizip/... 路径；否则直接返回。"""
+    """如果是 zip，先尝试 /vsizip/... 路径；若 GDAL 不支持该压缩格式则解压到临时目录。"""
     if ctx_input.lower().endswith(".zip"):
         with zipfile.ZipFile(ctx_input) as zf:
             tif_name = next(n for n in zf.namelist() if n.lower().endswith((".tif", ".tiff")))
         abs_zip = os.path.abspath(ctx_input).replace("\\", "/")
-        return f"/vsizip/{abs_zip}/{tif_name}"
+        vsizip_path = f"/vsizip/{abs_zip}/{tif_name}"
+        try:
+            with rasterio.open(vsizip_path) as _ds:
+                pass  # 试探性打开，验证 GDAL vsizip 是否可用
+            return vsizip_path
+        except Exception:
+            print("vsizip 打开失败（GDAL 不支持该 zip 压缩格式），解压到临时目录中，请稍候...")
+            tmp_dir = tempfile.mkdtemp(prefix="ctx_seg_")
+            atexit.register(shutil.rmtree, tmp_dir, True)
+            with zipfile.ZipFile(ctx_input) as zf:
+                zf.extract(tif_name, tmp_dir)
+            extracted = os.path.join(tmp_dir, tif_name)
+            print(f"解压完成: {extracted}")
+            return extracted
     return ctx_input
 
 
