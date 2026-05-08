@@ -47,6 +47,15 @@ def get_vsizip_path(ctx_input: str) -> str:
 
 def load_model_from_checkpoint(ckpt_path: str, device: torch.device):
     """从 checkpoint 自动恢复 cfg 并加载模型。"""
+    # PL 内部也会调用 torch.load，打补丁强制 weights_only=False
+    import functools
+    _orig = torch.load
+    @functools.wraps(_orig)
+    def _patched(*args, **kwargs):
+        kwargs["weights_only"] = False
+        return _orig(*args, **kwargs)
+    torch.load = _patched
+
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     cfg = OmegaConf.create(ckpt.get("hyper_parameters", {}))
 
