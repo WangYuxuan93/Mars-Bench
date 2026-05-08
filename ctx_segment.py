@@ -176,6 +176,11 @@ def visualize(ctx_path, label_map, patch_size, vis_downsample,
     n_classes = max(mapping.keys()) + 1
     cmap   = plt.get_cmap("tab20", n_classes)
     colors = np.array([cmap(i)[:3] for i in range(n_classes)])
+    # background 类显示为白色
+    for label_id, name in mapping.items():
+        if name == "background":
+            colors[label_id] = [1.0, 1.0, 1.0]
+            break
 
     # 底图（降采样，仅用于显示）
     base = read_vis_base(ctx_path, vis_downsample)
