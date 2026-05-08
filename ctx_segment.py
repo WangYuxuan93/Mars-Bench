@@ -21,14 +21,21 @@ import os
 import sys
 import zipfile
 
+import io
+import re
+
 import albumentations as A
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
 import rasterio.enums
 import rasterio.windows
+import shapefile
 import torch
+from matplotlib.collections import PatchCollection
+from matplotlib.patches import Polygon as MplPolygon
 from omegaconf import OmegaConf
+from pyproj import CRS, Transformer
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
@@ -155,6 +162,106 @@ def run_inference(ctx_path: str, n_rows: int, n_cols: int, patch_size: int,
     return label_map
 
 
+def decode_name(raw: str) -> str:
+    try:
+        return raw.encode("cp437").decode("gbk")
+    except Exception:
+        return raw
+
+
+def parse_task_name(filename: str) -> str:
+    name = os.path.splitext(filename)[0]
+    return re.sub(r'_\d{8}_\d+\s*$', '', name)
+
+
+def get_tile_lonlat_bounds(ctx_path: str):
+    """从 CTX tile 元数据读取地理范围（度），返回 (lon_min, lat_min, lon_max, lat_max)。"""
+    with rasterio.open(ctx_path) as ds:
+        crs_wkt = ds.crs.to_wkt()
+        b = ds.bounds
+    proj_crs = CRS.from_wkt(crs_wkt)
+    geo_crs  = proj_crs.geodetic_crs
+    t = Transformer.from_crs(proj_crs, geo_crs, always_xy=True)
+    lon_min, lat_min = t.transform(b.left,  b.bottom)
+    lon_max, lat_max = t.transform(b.right, b.top)
+    return lon_min, lat_min, lon_max, lat_max
+
+
+def load_annotations_for_tile(annotation_dir: str, lon_min, lat_min, lon_max, lat_max,
+                               name_to_id: dict):
+    """扫描 annotation_dir，返回落在 tile 内的标注 {label_id: (shapes, prj_wkt)}。"""
+    result = {}
+    for fname in sorted(os.listdir(annotation_dir)):
+        if not fname.endswith(".zip"):
+            continue
+        task_name = parse_task_name(fname)
+        if task_name not in name_to_id:
+            continue
+        label_id = name_to_id[task_name]
+        zip_path = os.path.join(annotation_dir, fname)
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                names   = {decode_name(i.filename): i.filename for i in zf.infolist()}
+                shp_key = next((k for k in names if k.endswith(".shp")), None)
+                if not shp_key:
+                    continue
+                base = shp_key[:-4]
+                def part(ext):
+                    raw = names.get(base + ext)
+                    return io.BytesIO(zf.read(raw)) if raw else None
+                prj_raw = names.get(base + ".prj")
+                prj_wkt = zf.read(prj_raw).decode("utf-8") if prj_raw else None
+                sf = shapefile.Reader(shp=part(".shp"), shx=part(".shx"),
+                                      dbf=part(".dbf"), encoding="utf-8")
+                shapes = [
+                    s for s in sf.iterShapes()
+                    if lon_min <= (s.bbox[0] + s.bbox[2]) / 2 <= lon_max
+                    and lat_min <= (s.bbox[1] + s.bbox[3]) / 2 <= lat_max
+                ]
+            if shapes:
+                result[label_id] = (shapes, prj_wkt)
+                print(f"  annotation [{label_id}] {task_name}: {len(shapes)} 个要素")
+        except Exception as e:
+            print(f"  跳过 {fname}: {e}")
+    return result
+
+
+def draw_annotation_panel(ax, base_rgb, annotations, colors, ctx_path, vis_downsample):
+    """在 ax 上绘制 CTX 底图 + 各类标注多边形。"""
+    ax.imshow(base_rgb, cmap="gray")
+
+    with rasterio.open(ctx_path) as ds:
+        ctx_crs_wkt = ds.crs.to_wkt()
+        affine      = ds.transform
+        scale       = 1.0 / vis_downsample
+
+    for label_id, (shapes, prj_wkt) in annotations.items():
+        src_crs = CRS.from_wkt(prj_wkt) if prj_wkt else CRS.from_epsg(4326)
+        dst_crs = CRS.from_wkt(ctx_crs_wkt)
+        trans   = Transformer.from_crs(src_crs, dst_crs, always_xy=True)
+
+        def lonlat_to_px(lon, lat):
+            mx, my = trans.transform(lon, lat)
+            col = (mx - affine.c) / affine.a * scale
+            row = (my - affine.f) / affine.e * scale
+            return col, row
+
+        patches = []
+        for shape in shapes:
+            if not shape.points:
+                continue
+            parts_idx = list(shape.parts) + [len(shape.points)]
+            for i in range(len(shape.parts)):
+                ring = shape.points[parts_idx[i]:parts_idx[i + 1]]
+                px_coords = [lonlat_to_px(p[0], p[1]) for p in ring]
+                patches.append(MplPolygon(px_coords, closed=True))
+
+        color = colors[label_id]
+        pc = PatchCollection(patches, facecolor="none",
+                             edgecolor=color, linewidths=0.6, alpha=0.9)
+        ax.add_collection(pc)
+
+
 def read_vis_base(ctx_path: str, vis_downsample: int) -> np.ndarray:
     """读取降采样版底图，仅用于可视化，不影响推理。"""
     with rasterio.open(ctx_path) as ds:
@@ -167,7 +274,7 @@ def read_vis_base(ctx_path: str, vis_downsample: int) -> np.ndarray:
 
 
 def visualize(ctx_path, label_map, patch_size, vis_downsample,
-              mapping, output_path, alpha):
+              mapping, output_path, alpha, annotations=None):
     plt.rcParams["font.sans-serif"] = [
         "WenQuanYi Micro Hei", "Noto Sans CJK SC",
         "Microsoft YaHei", "SimHei", "DejaVu Sans",
@@ -199,13 +306,22 @@ def visualize(ctx_path, label_map, patch_size, vis_downsample,
     blended = np.clip(
         (1 - alpha) * base_rgb[:H, :W] + alpha * seg_full[:H, :W], 0, 1)
 
-    fig, axes = plt.subplots(1, 2, figsize=(20, 10))
-    axes[0].imshow(base_rgb, cmap="gray"); axes[0].set_title("CTX 原图");  axes[0].axis("off")
+    n_panels = 3 if annotations else 2
+    fig, axes = plt.subplots(1, n_panels, figsize=(10 * n_panels, 10))
+    axes[0].imshow(base_rgb, cmap="gray"); axes[0].set_title("CTX 原图");   axes[0].axis("off")
     axes[1].imshow(blended);              axes[1].set_title("语义分割结果"); axes[1].axis("off")
 
     handles = [plt.Rectangle((0, 0), 1, 1, fc=colors[i]) for i in sorted(mapping.keys())]
     axes[1].legend(handles, [mapping[i] for i in sorted(mapping.keys())],
                    loc="lower right", fontsize=6, ncol=2, framealpha=0.8)
+
+    if annotations:
+        axes[2].set_title("标注 Ground Truth"); axes[2].axis("off")
+        draw_annotation_panel(axes[2], base_rgb, annotations, colors, ctx_path, vis_downsample)
+        # 图例：仅显示本 tile 中有标注的类
+        ann_handles = [plt.Rectangle((0, 0), 1, 1, fc=colors[lid]) for lid in sorted(annotations)]
+        axes[2].legend(ann_handles, [mapping.get(lid, str(lid)) for lid in sorted(annotations)],
+                       loc="lower right", fontsize=6, ncol=2, framealpha=0.8)
 
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -232,6 +348,8 @@ def main():
     parser.add_argument("--alpha",          type=float, default=0.5)
     parser.add_argument("--vis-downsample", type=int,   default=8,
                         help="可视化底图的降采样倍数（不影响推理，默认 8）")
+    parser.add_argument("--annotation-dir", default=None,
+                        help="标注 zip 文件目录（可选）；提供后在第三面板绘制 ground truth 标注")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") \
@@ -259,8 +377,18 @@ def main():
         transform, model, device, args.batch_size, args.num_workers,
     )
 
+    annotations = None
+    if args.annotation_dir:
+        print("加载标注数据...")
+        lon_min, lat_min, lon_max, lat_max = get_tile_lonlat_bounds(ctx_path)
+        name_to_id = {v: k for k, v in mapping.items()}
+        annotations = load_annotations_for_tile(
+            args.annotation_dir, lon_min, lat_min, lon_max, lat_max, name_to_id
+        )
+        print(f"共找到 {len(annotations)} 类标注")
+
     visualize(ctx_path, label_map, args.patch_size, args.vis_downsample,
-              mapping, args.output_png, args.alpha)
+              mapping, args.output_png, args.alpha, annotations=annotations)
 
 
 if __name__ == "__main__":
