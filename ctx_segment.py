@@ -168,6 +168,11 @@ def read_vis_base(ctx_path: str, vis_downsample: int) -> np.ndarray:
 
 def visualize(ctx_path, label_map, patch_size, vis_downsample,
               mapping, output_path, alpha):
+    plt.rcParams["font.sans-serif"] = [
+        "WenQuanYi Micro Hei", "Noto Sans CJK SC",
+        "Microsoft YaHei", "SimHei", "DejaVu Sans",
+    ]
+    plt.rcParams["axes.unicode_minus"] = False
     n_classes = max(mapping.keys()) + 1
     cmap   = plt.get_cmap("tab20", n_classes)
     colors = np.array([cmap(i)[:3] for i in range(n_classes)])
