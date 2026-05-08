@@ -16,14 +16,11 @@ CTX 输入支持：
 """
 
 import argparse
-import atexit
 import io
 import json
 import os
 import re
-import shutil
 import sys
-import tempfile
 import zipfile
 
 import albumentations as A
@@ -45,46 +42,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def get_vsizip_path(ctx_input: str) -> str:
-    """如果是 zip，依次尝试：vsizip → 系统 unzip → Python zipfile，返回可用的 tif 路径。"""
+    """如果是 zip，返回 /vsizip/... 路径；否则直接返回。"""
     if ctx_input.lower().endswith(".zip"):
         with zipfile.ZipFile(ctx_input) as zf:
             tif_name = next(n for n in zf.namelist() if n.lower().endswith((".tif", ".tiff")))
-
-        # 1) 尝试 GDAL vsizip（不解压，最快）
         abs_zip = os.path.abspath(ctx_input).replace("\\", "/")
-        vsizip_path = f"/vsizip/{abs_zip}/{tif_name}"
-        try:
-            with rasterio.open(vsizip_path) as _ds:
-                pass
-            return vsizip_path
-        except Exception:
-            print("vsizip 打开失败，尝试解压到临时目录（请稍候）...")
-
-        tmp_dir = tempfile.mkdtemp(prefix="ctx_seg_")
-        atexit.register(shutil.rmtree, tmp_dir, True)
-
-        # 2) 系统 unzip（支持更多 zip 变体，Linux 上通常可用）
-        try:
-            import subprocess
-            ret = subprocess.run(
-                ["unzip", "-o", ctx_input, tif_name, "-d", tmp_dir],
-                capture_output=True, text=True,
-            )
-            extracted = os.path.join(tmp_dir, tif_name)
-            if ret.returncode == 0 and os.path.exists(extracted):
-                print(f"解压完成（unzip）: {extracted}")
-                return extracted
-            print(f"unzip 退出码 {ret.returncode}: {ret.stderr.strip()}")
-        except FileNotFoundError:
-            print("系统 unzip 不可用，尝试 Python zipfile...")
-
-        # 3) Python zipfile（最后兜底）
-        with zipfile.ZipFile(ctx_input) as zf:
-            zf.extract(tif_name, tmp_dir)
-        extracted = os.path.join(tmp_dir, tif_name)
-        print(f"解压完成（zipfile）: {extracted}")
-        return extracted
-
+        return f"/vsizip/{abs_zip}/{tif_name}"
     return ctx_input
 
 
