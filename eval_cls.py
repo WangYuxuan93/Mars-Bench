@@ -111,26 +111,28 @@ def print_misclassification(cm_norm, class_names, top_n=3):
 
 def save_csv(report_dict, cm_norm, class_names, output_path):
     import csv
+    base_fields = ["class_id", "class_name", "precision", "recall", "f1-score", "support"]
+    misclf_fields = [f"misclf_to_{name}" for name in class_names]
+    fieldnames = base_fields + misclf_fields
+
     rows = []
     for i, name in enumerate(class_names):
         r = report_dict.get(name, {})
         row = {
-            "class_id":  i,
+            "class_id":   i,
             "class_name": name,
             "precision":  round(r.get("precision", 0), 4),
             "recall":     round(r.get("recall", 0), 4),
             "f1-score":   round(r.get("f1-score", 0), 4),
             "support":    int(r.get("support", 0)),
         }
-        # 误分列
         for j, jname in enumerate(class_names):
-            if j != i:
-                row[f"misclf_to_{jname}"] = round(float(cm_norm[i, j]), 4)
+            row[f"misclf_to_{jname}"] = round(float(cm_norm[i, j]), 4)
         rows.append(row)
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
     print(f"\nCSV 已保存: {output_path}")
