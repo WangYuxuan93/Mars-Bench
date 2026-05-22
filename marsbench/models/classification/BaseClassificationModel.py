@@ -351,6 +351,15 @@ class BaseClassificationModel(LightningModule, ABC):
             classes = list(range(len(probs)))
             values = probs.cpu().numpy().tolist()
         # ---- plot ----
+        import matplotlib.font_manager as fm
+        _cjk = next(
+            (f for f in ["WenQuanYi Micro Hei", "Microsoft YaHei", "SimHei", "Noto Sans CJK SC"]
+             if fm.findfont(fm.FontProperties(family=f)) != fm.findfont(fm.FontProperties())),
+            None,
+        )
+        if _cjk:
+            plt.rcParams["font.sans-serif"] = [_cjk] + plt.rcParams["font.sans-serif"]
+            plt.rcParams["axes.unicode_minus"] = False
         fig, ax = plt.subplots(
             figsize=(width / 100, height / 100),
             constrained_layout=True,
