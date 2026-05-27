@@ -272,12 +272,33 @@ def read_vis_base(ctx_path: str, vis_downsample: int) -> np.ndarray:
     return np.clip((band.astype(np.float32) - p2) / max(p98 - p2, 1) * 255, 0, 255).astype(np.uint8)
 
 
+def _find_cjk_font():
+    """Find an available CJK font without spamming warnings."""
+    import warnings
+    from matplotlib import font_manager as fm
+
+    cjk_candidates = [
+        "WenQuanYi Micro Hei", "Noto Sans CJK SC", "Noto Sans CJK TC",
+        "WenQuanYi Zen Hei", "AR PL UMing CN", "AR PL UKai CN",
+        "Microsoft YaHei", "SimHei", "SimSun",
+    ]
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+        default_font = fm.findfont(fm.FontProperties())
+        for f in cjk_candidates:
+            try:
+                found = fm.findfont(fm.FontProperties(family=f))
+                if found != default_font:
+                    return f
+            except Exception:
+                pass
+    return None
+
+
 def visualize(ctx_path, label_map, patch_size, vis_downsample,
               mapping, output_path, alpha, annotations=None):
-    plt.rcParams["font.sans-serif"] = [
-        "WenQuanYi Micro Hei", "Noto Sans CJK SC",
-        "Microsoft YaHei", "SimHei", "DejaVu Sans",
-    ]
+    _cjk = _find_cjk_font()
+    plt.rcParams["font.sans-serif"] = [_cjk] if _cjk else ["DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
     n_classes = max(mapping.keys()) + 1
     cmap   = plt.get_cmap("tab20", n_classes)

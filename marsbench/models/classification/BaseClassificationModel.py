@@ -4,9 +4,11 @@ Abstract base class for all Mars surface image classification models.
 
 import io
 import logging
+import warnings
 from abc import ABC
 from abc import abstractmethod
 from typing import Dict
+from typing import Optional
 from typing import Tuple
 
 import matplotlib.pyplot as plt
@@ -298,19 +300,35 @@ class BaseClassificationModel(LightningModule, ABC):
         return out
 
     @staticmethod
+    def _find_cjk_font() -> Optional[str]:
+        """Find an available CJK font without spamming warnings."""
+        import matplotlib.font_manager as fm
+
+        cjk_candidates = [
+            "WenQuanYi Micro Hei", "Noto Sans CJK SC", "Noto Sans CJK TC",
+            "WenQuanYi Zen Hei", "AR PL UMing CN", "AR PL UKai CN",
+            "Microsoft YaHei", "SimHei", "SimSun",
+        ]
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+            default_font = fm.findfont(fm.FontProperties())
+            for f in cjk_candidates:
+                try:
+                    found = fm.findfont(fm.FontProperties(family=f))
+                    if found != default_font:
+                        return f
+                except Exception:
+                    pass
+        return None
+
+    @staticmethod
     def text_panel(lines: str, width: int, height: int, font_size: int) -> torch.Tensor:
         """Render wrapped text using Matplotlib to fit exactly in width/height."""
         fig, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100)
         ax.axis("off")
         fig.patch.set_facecolor("white")
 
-        import matplotlib.font_manager as fm
-        cjk_candidates = ["Microsoft YaHei", "SimHei", "WenQuanYi Micro Hei", "Noto Sans CJK SC"]
-        font_family = next(
-            (f for f in cjk_candidates
-             if fm.findfont(fm.FontProperties(family=f)) != fm.findfont(fm.FontProperties())),
-            "DejaVu Sans",
-        )
+        font_family = BaseClassificationModel._find_cjk_font() or "DejaVu Sans"
         ax.text(
             0.01,
             0.99,
@@ -325,7 +343,9 @@ class BaseClassificationModel(LightningModule, ABC):
         )
 
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=100, facecolor=fig.get_facecolor())
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning, message="Glyph.*missing from font")
+            fig.savefig(buf, format="png", dpi=100, facecolor=fig.get_facecolor())
         plt.close(fig)
         buf.seek(0)
 
@@ -351,12 +371,7 @@ class BaseClassificationModel(LightningModule, ABC):
             classes = list(range(len(probs)))
             values = probs.cpu().numpy().tolist()
         # ---- plot ----
-        import matplotlib.font_manager as fm
-        _cjk = next(
-            (f for f in ["WenQuanYi Micro Hei", "Microsoft YaHei", "SimHei", "Noto Sans CJK SC"]
-             if fm.findfont(fm.FontProperties(family=f)) != fm.findfont(fm.FontProperties())),
-            None,
-        )
+        _cjk = self._find_cjk_font()
         if _cjk:
             plt.rcParams["font.sans-serif"] = [_cjk] + plt.rcParams["font.sans-serif"]
             plt.rcParams["axes.unicode_minus"] = False
