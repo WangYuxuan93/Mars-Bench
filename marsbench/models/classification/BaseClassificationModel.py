@@ -2,6 +2,7 @@
 Abstract base class for all Mars surface image classification models.
 """
 
+import functools
 import io
 import logging
 import warnings
@@ -300,8 +301,9 @@ class BaseClassificationModel(LightningModule, ABC):
         return out
 
     @staticmethod
+    @functools.lru_cache(maxsize=1)
     def _find_cjk_font() -> Optional[str]:
-        """Find an available CJK font without spamming warnings."""
+        """Find an available CJK font. Cached so font probing runs only once."""
         import matplotlib.font_manager as fm
 
         cjk_candidates = [
@@ -309,16 +311,24 @@ class BaseClassificationModel(LightningModule, ABC):
             "WenQuanYi Zen Hei", "AR PL UMing CN", "AR PL UKai CN",
             "Microsoft YaHei", "SimHei", "SimSun",
         ]
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
-            default_font = fm.findfont(fm.FontProperties())
-            for f in cjk_candidates:
-                try:
-                    found = fm.findfont(fm.FontProperties(family=f))
-                    if found != default_font:
-                        return f
-                except Exception:
-                    pass
+        # findfont emits logging-level warnings (not Python warnings), so we
+        # temporarily silence the matplotlib.font_manager logger here.
+        _fm_logger = logging.getLogger("matplotlib.font_manager")
+        _prev_level = _fm_logger.level
+        _fm_logger.setLevel(logging.ERROR)
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+                default_font = fm.findfont(fm.FontProperties())
+                for f in cjk_candidates:
+                    try:
+                        found = fm.findfont(fm.FontProperties(family=f))
+                        if found != default_font:
+                            return f
+                    except Exception:
+                        pass
+        finally:
+            _fm_logger.setLevel(_prev_level)
         return None
 
     @staticmethod

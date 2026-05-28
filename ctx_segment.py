@@ -16,6 +16,7 @@ CTX 输入支持：
 """
 
 import argparse
+import functools
 import io
 import json
 import os
@@ -272,9 +273,11 @@ def read_vis_base(ctx_path: str, vis_downsample: int) -> np.ndarray:
     return np.clip((band.astype(np.float32) - p2) / max(p98 - p2, 1) * 255, 0, 255).astype(np.uint8)
 
 
+@functools.lru_cache(maxsize=1)
 def _find_cjk_font():
-    """Find an available CJK font without spamming warnings."""
+    """Find an available CJK font. Cached so font probing runs only once."""
     import warnings
+    import logging
     from matplotlib import font_manager as fm
 
     cjk_candidates = [
@@ -282,16 +285,22 @@ def _find_cjk_font():
         "WenQuanYi Zen Hei", "AR PL UMing CN", "AR PL UKai CN",
         "Microsoft YaHei", "SimHei", "SimSun",
     ]
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
-        default_font = fm.findfont(fm.FontProperties())
-        for f in cjk_candidates:
-            try:
-                found = fm.findfont(fm.FontProperties(family=f))
-                if found != default_font:
-                    return f
-            except Exception:
-                pass
+    _fm_logger = logging.getLogger("matplotlib.font_manager")
+    _prev_level = _fm_logger.level
+    _fm_logger.setLevel(logging.ERROR)
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+            default_font = fm.findfont(fm.FontProperties())
+            for f in cjk_candidates:
+                try:
+                    found = fm.findfont(fm.FontProperties(family=f))
+                    if found != default_font:
+                        return f
+                except Exception:
+                    pass
+    finally:
+        _fm_logger.setLevel(_prev_level)
     return None
 
 
