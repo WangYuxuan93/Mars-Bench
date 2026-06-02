@@ -26,6 +26,7 @@ import argparse
 import functools
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -286,7 +287,9 @@ def _find_cjk_font():
 @torch.no_grad()
 def run_inference_with_conf(ctx_path: str, n_rows: int, n_cols: int, patch_size: int,
                             transform, model, device, batch_size: int, num_workers: int):
-    """逐 patch 推理，同时返回 label_map 和 conf_map，shape 均为 [n_rows, n_cols]。"""
+    """逐 patch 推理，返回 label_map、conf_map、entropy_map，shape 均为 [n_rows, n_cols]。
+    entropy_map 为归一化熵（0=完全确定，1=完全均匀分散），用于熵过滤。
+    """
     dataset = CTXPatchDataset(ctx_path, n_rows, n_cols, patch_size, transform)
     loader  = DataLoader(
         dataset,
@@ -295,19 +298,27 @@ def run_inference_with_conf(ctx_path: str, n_rows: int, n_cols: int, patch_size:
         pin_memory=(device.type == "cuda"),
         prefetch_factor=2 if num_workers > 0 else None,
     )
-    label_map = np.zeros((n_rows, n_cols), dtype=np.int32)
-    conf_map  = np.zeros((n_rows, n_cols), dtype=np.float32)
+    label_map   = np.zeros((n_rows, n_cols), dtype=np.int32)
+    conf_map    = np.zeros((n_rows, n_cols), dtype=np.float32)
+    entropy_map = np.zeros((n_rows, n_cols), dtype=np.float32)
 
     for tensors, rows, cols in tqdm(loader, desc=f"  推理 patch={patch_size}px"):
         logits = model(tensors.to(device))
         probs  = torch.softmax(logits, dim=1)
         preds  = probs.argmax(dim=1).cpu().numpy()
         confs  = probs.max(dim=1).values.cpu().numpy()
-        for pred, conf, r, c in zip(preds, confs, rows.numpy(), cols.numpy()):
-            label_map[r, c] = pred
-            conf_map[r, c]  = conf
 
-    return label_map, conf_map
+        # 归一化熵：H / log(N)，范围 [0, 1]
+        n_cls      = probs.shape[1]
+        raw_ent    = -(probs * torch.log(probs + 1e-10)).sum(dim=1)
+        norm_ent   = (raw_ent / math.log(n_cls)).cpu().numpy()
+
+        for pred, conf, ent, r, c in zip(preds, confs, norm_ent, rows.numpy(), cols.numpy()):
+            label_map[r, c]   = pred
+            conf_map[r, c]    = conf
+            entropy_map[r, c] = ent
+
+    return label_map, conf_map, entropy_map
 
 
 def build_global_mapping(mapping_128: dict, mapping_256: dict, mapping_1024: dict):
@@ -357,17 +368,21 @@ def _upsample(arr: np.ndarray, factor: int, target_R: int, target_C: int) -> np.
 
 
 def fuse_label_maps(
-    label_128,  conf_128,
-    label_256,  conf_256,
-    label_1024, conf_1024,
+    label_128,  conf_128,  entropy_128,
+    label_256,  conf_256,  entropy_256,
+    label_1024, conf_1024, entropy_1024,
     id_map_128, id_map_256, id_map_1024,
-    thresh_128: float, thresh_256: float, thresh_1024: float,
-    weight_128: float, weight_256: float, weight_1024: float,
+    thresh_128: float,        thresh_256: float,        thresh_1024: float,
+    weight_128: float,        weight_256: float,        weight_1024: float,
+    entropy_thresh_128: float, entropy_thresh_256: float, entropy_thresh_1024: float,
 ) -> np.ndarray:
     """
     以 128px 网格为基准，将三路预测融合为全局 label map。
-    对每个格子：非 background 且过阈值的候选中，取加权置信度（conf × weight）最高者；
-    全为 background 或无候选过阈值则输出 background（0）。
+    每个格子满足以下全部条件才作为非 background 候选：
+      1. argmax 不是 background
+      2. 置信度（max softmax）>= thresh
+      3. 归一化熵 <= entropy_thresh（分布足够集中，模型真的确定）
+    多路候选中取加权得分（conf × weight）最高者；无候选则输出 background（0）。
     """
     R, C = label_128.shape
 
@@ -378,21 +393,26 @@ def fuse_label_maps(
     # 全局标签（128px 网格分辨率）
     glb_128 = lut_128[label_128]                                         # [R, C]
 
-    # 256px → 128px 网格（factor=2，因为 R//128 = 2 * (R//256)）
-    glb_256_up  = _upsample(lut_256[label_256], 2, R, C)
-    conf_256_up = _upsample(conf_256,           2, R, C)
+    # 256px → 128px 网格（factor=2）
+    glb_256_up     = _upsample(lut_256[label_256], 2, R, C)
+    conf_256_up    = _upsample(conf_256,            2, R, C)
+    entropy_256_up = _upsample(entropy_256,         2, R, C)
 
-    # 1024px → 128px 网格（factor=8，因为 R//128 = 8 * (R//1024)）
-    glb_1024_up  = _upsample(lut_1024[label_1024], 8, R, C)
-    conf_1024_up = _upsample(conf_1024,             8, R, C)
+    # 1024px → 128px 网格（factor=8）
+    glb_1024_up     = _upsample(lut_1024[label_1024], 8, R, C)
+    conf_1024_up    = _upsample(conf_1024,             8, R, C)
+    entropy_1024_up = _upsample(entropy_1024,          8, R, C)
 
-    # 加权得分：background 或低于阈值的预测得分置 0
-    score_128  = np.where((glb_128     != 0) & (conf_128      >= thresh_128),
-                          conf_128      * weight_128,  0.0).astype(np.float32)
-    score_256  = np.where((glb_256_up  != 0) & (conf_256_up   >= thresh_256),
-                          conf_256_up   * weight_256,  0.0).astype(np.float32)
-    score_1024 = np.where((glb_1024_up != 0) & (conf_1024_up  >= thresh_1024),
-                          conf_1024_up  * weight_1024, 0.0).astype(np.float32)
+    # 加权得分：三个条件均满足才有正得分，否则置 0（视为 background）
+    score_128  = np.where(
+        (glb_128     != 0) & (conf_128      >= thresh_128)  & (entropy_128      <= entropy_thresh_128),
+        conf_128      * weight_128,  0.0).astype(np.float32)
+    score_256  = np.where(
+        (glb_256_up  != 0) & (conf_256_up   >= thresh_256)  & (entropy_256_up   <= entropy_thresh_256),
+        conf_256_up   * weight_256,  0.0).astype(np.float32)
+    score_1024 = np.where(
+        (glb_1024_up != 0) & (conf_1024_up  >= thresh_1024) & (entropy_1024_up  <= entropy_thresh_1024),
+        conf_1024_up  * weight_1024, 0.0).astype(np.float32)
 
     scores = np.stack([score_128,  score_256,  score_1024],  axis=0)    # [3, R, C]
     labels = np.stack([glb_128,    glb_256_up, glb_1024_up], axis=0)    # [3, R, C]
@@ -401,8 +421,60 @@ def fuse_label_maps(
     best_score = np.max(scores,   axis=0)                                # [R, C]
     best_label = np.take_along_axis(labels, best_idx[np.newaxis], axis=0).squeeze(0)
 
-    # 三路均为 background 或无候选过阈值时输出 0
+    # 三路均无有效候选时输出 background（0）
     return np.where(best_score > 0, best_label, 0).astype(np.int32)
+
+
+# ── post-processing ──────────────────────────────────────────────────────────
+
+def majority_filter(label_map: np.ndarray, kernel_size: int) -> np.ndarray:
+    """众数滤波：对每个格子取邻域内出现最多的类别，消除盐椒噪点。
+    实现方式：one-hot 展开 → 对每个类别做 box 滑窗求和 → argmax。
+    纯向量化，不使用 Python 循环。
+    """
+    from scipy.ndimage import uniform_filter
+    n_classes = int(label_map.max()) + 1
+    scores = np.stack([
+        uniform_filter((label_map == k).astype(np.float32), size=kernel_size)
+        for k in range(n_classes)
+    ], axis=0)                                  # [n_classes, R, C]
+    return np.argmax(scores, axis=0).astype(np.int32)
+
+
+def remove_small_components(label_map: np.ndarray, min_size: int) -> np.ndarray:
+    """小区域去除：面积小于 min_size 格的连通域，替换为周围邻居中最常见的类别。
+    不直接改成背景，避免在图上产生新的空洞。
+    """
+    from scipy.ndimage import label as nd_label, binary_dilation
+    result = label_map.copy()
+    for class_id in np.unique(label_map):
+        if class_id == 0:           # 背景本身不处理
+            continue
+        binary = (label_map == class_id)
+        labeled, n_comp = nd_label(binary)
+        for comp_id in range(1, n_comp + 1):
+            mask = (labeled == comp_id)
+            if mask.sum() >= min_size:
+                continue
+            # 向外膨胀 2 格，取邻居中最常见的类别
+            dilated        = binary_dilation(mask, iterations=2)
+            neighbor_vals  = result[dilated & ~mask]
+            replace        = int(np.bincount(neighbor_vals.astype(np.intp)).argmax()) \
+                             if neighbor_vals.size > 0 else 0
+            result[mask]   = replace
+    return result
+
+
+def postprocess(label_map: np.ndarray, smooth_kernel: int, min_region: int) -> np.ndarray:
+    """后处理入口：先众数滤波，再小区域去除。任一步设为 0 则跳过。"""
+    result = label_map
+    if smooth_kernel > 0:
+        print(f"  众数滤波 kernel={smooth_kernel}×{smooth_kernel} ...")
+        result = majority_filter(result, smooth_kernel)
+    if min_region > 0:
+        print(f"  小区域去除 min_size={min_region} 格 ...")
+        result = remove_small_components(result, min_region)
+    return result
 
 
 def _make_colors(n_classes: int) -> np.ndarray:
@@ -503,6 +575,21 @@ def main():
     parser.add_argument("--weight-1024", type=float, default=0.6,
                         help="1024px 模型尺度系数（默认 0.6）")
 
+    # 熵过滤阈值：归一化熵超过此值视为"模型不确定"，强制输出 background
+    # 归一化熵范围 [0, 1]：0=完全确定，1=完全均匀分散
+    parser.add_argument("--entropy-thresh-128",  type=float, default=0.65,
+                        help="128px 模型熵过滤阈值（默认 0.65）")
+    parser.add_argument("--entropy-thresh-256",  type=float, default=0.65,
+                        help="256px 模型熵过滤阈值（默认 0.65）")
+    parser.add_argument("--entropy-thresh-1024", type=float, default=0.65,
+                        help="1024px 模型熵过滤阈值（默认 0.65）")
+
+    # 后处理平滑（默认均不执行）
+    parser.add_argument("--smooth-kernel", type=int, default=0,
+                        help="众数滤波窗口大小，0=不执行（建议值：5 或 7；值越大越平滑，但细长地物可能被抹掉）")
+    parser.add_argument("--min-region",    type=int, default=0,
+                        help="最小连通域面积（格子数），小于此值的孤立色块合并到周围类别，0=不执行（建议值：10~20）")
+
     parser.add_argument("--annotation-dir", default=None,
                         help="标注 zip 目录（可选，提供后在第三面板绘制 GT 标注）")
     args = parser.parse_args()
@@ -524,7 +611,7 @@ def main():
         (1024, args.ckpt_1024, args.mapping_1024, args.thresh_1024, args.weight_1024),
     ]
 
-    results  = {}   # patch_size -> (label_map, conf_map)
+    results  = {}   # patch_size -> (label_map, conf_map, entropy_map)
     mappings = {}   # patch_size -> {local_id: class_name}
 
     for patch_size, ckpt_path, mapping_path, _thresh, _weight in scale_cfgs:
@@ -540,11 +627,11 @@ def main():
         n_cols = full_w  // patch_size
         print(f"  patch 网格: {n_rows}×{n_cols} = {n_rows * n_cols} 个")
 
-        label_map, conf_map = run_inference_with_conf(
+        label_map, conf_map, entropy_map = run_inference_with_conf(
             ctx_path, n_rows, n_cols, patch_size,
             transform, model, device, args.batch_size, args.num_workers,
         )
-        results[patch_size] = (label_map, conf_map)
+        results[patch_size] = (label_map, conf_map, entropy_map)
         del model   # 及时释放显存再加载下一个模型
 
     # ── 构建全局标签空间 ──────────────────────────────────────────────────────
@@ -558,24 +645,34 @@ def main():
 
     # ── 融合 ──────────────────────────────────────────────────────────────────
     print("\n── 融合三路预测 ──────────────────────────────────────────────────")
-    label_128,  conf_128  = results[128]
-    label_256,  conf_256  = results[256]
-    label_1024, conf_1024 = results[1024]
+    label_128,  conf_128,  entropy_128  = results[128]
+    label_256,  conf_256,  entropy_256  = results[256]
+    label_1024, conf_1024, entropy_1024 = results[1024]
 
     fused = fuse_label_maps(
-        label_128,  conf_128,
-        label_256,  conf_256,
-        label_1024, conf_1024,
+        label_128,  conf_128,  entropy_128,
+        label_256,  conf_256,  entropy_256,
+        label_1024, conf_1024, entropy_1024,
         id_map_128, id_map_256, id_map_1024,
         args.thresh_128,  args.thresh_256,  args.thresh_1024,
         args.weight_128,  args.weight_256,  args.weight_1024,
+        args.entropy_thresh_128, args.entropy_thresh_256, args.entropy_thresh_1024,
     )
 
-    # 打印各类命中数量
+    # 打印融合结果分布
     unique, counts = np.unique(fused, return_counts=True)
     print("融合结果分布:")
     for gid, cnt in zip(unique, counts):
         print(f"  [{gid:3d}] {global_mapping.get(gid, '?'):20s}  {cnt} 格")
+
+    # ── 后处理平滑 ────────────────────────────────────────────────────────────
+    if args.smooth_kernel > 0 or args.min_region > 0:
+        print("\n── 后处理平滑 ────────────────────────────────────────────────")
+        fused = postprocess(fused, args.smooth_kernel, args.min_region)
+        unique, counts = np.unique(fused, return_counts=True)
+        print("平滑后结果分布:")
+        for gid, cnt in zip(unique, counts):
+            print(f"  [{gid:3d}] {global_mapping.get(gid, '?'):20s}  {cnt} 格")
 
     # ── 可选标注 ──────────────────────────────────────────────────────────────
     annotations = None
