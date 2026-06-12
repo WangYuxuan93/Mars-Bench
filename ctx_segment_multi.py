@@ -501,7 +501,8 @@ def _make_colors(n_classes: int) -> np.ndarray:
 
 
 def visualize(ctx_path, label_map, vis_downsample,
-              mapping, output_path, alpha, annotations=None):
+              mapping, output_path, alpha, annotations=None, label_map_raw=None):
+    """label_map_raw 不为 None 时（执行过平滑），额外绘制一个"平滑前"面板用于对比。"""
     _cjk = _find_cjk_font()
     plt.rcParams["font.sans-serif"] = [_cjk] if _cjk else ["DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
@@ -518,28 +519,38 @@ def visualize(ctx_path, label_map, vis_downsample,
 
     # label_map 在 128px 网格，可视化时每格对应 128/vis_downsample 个像素
     vis_patch = max(128 // vis_downsample, 1)
-    seg_color = colors[label_map]
-    seg_full  = np.repeat(np.repeat(seg_color, vis_patch, axis=0), vis_patch, axis=1)
 
-    H = min(base_rgb.shape[0], seg_full.shape[0])
-    W = min(base_rgb.shape[1], seg_full.shape[1])
-    blended = np.clip((1 - alpha) * base_rgb[:H, :W] + alpha * seg_full[:H, :W], 0, 1)
+    def _blend(lmap):
+        seg_color = colors[lmap]
+        seg_full  = np.repeat(np.repeat(seg_color, vis_patch, axis=0), vis_patch, axis=1)
+        H = min(base_rgb.shape[0], seg_full.shape[0])
+        W = min(base_rgb.shape[1], seg_full.shape[1])
+        return np.clip((1 - alpha) * base_rgb[:H, :W] + alpha * seg_full[:H, :W], 0, 1)
 
-    n_panels = 3 if annotations else 2
+    # 面板序列：原图 → (平滑前) → 分割结果 → (标注)
+    panels = [("CTX 原图", base_rgb)]
+    if label_map_raw is not None:
+        panels.append(("融合结果（平滑前）", _blend(label_map_raw)))
+        panels.append(("融合结果（平滑后）", _blend(label_map)))
+    else:
+        panels.append(("多尺度融合分割结果", _blend(label_map)))
+
+    n_panels = len(panels) + (1 if annotations else 0)
     fig, axes = plt.subplots(1, n_panels, figsize=(10 * n_panels, 10))
-    axes[0].imshow(base_rgb, cmap="gray"); axes[0].set_title("CTX 原图");        axes[0].axis("off")
-    axes[1].imshow(blended);              axes[1].set_title("多尺度融合分割结果"); axes[1].axis("off")
+    for ax, (title, img) in zip(axes, panels):
+        ax.imshow(img); ax.set_title(title); ax.axis("off")
 
     handles = [plt.Rectangle((0, 0), 1, 1, fc=colors[i]) for i in sorted(mapping.keys())]
-    axes[1].legend(handles, [mapping[i] for i in sorted(mapping.keys())],
-                   loc="lower right", fontsize=5, ncol=3, framealpha=0.8)
+    axes[len(panels) - 1].legend(handles, [mapping[i] for i in sorted(mapping.keys())],
+                                 loc="lower right", fontsize=5, ncol=3, framealpha=0.8)
 
     if annotations:
-        axes[2].set_title("标注 Ground Truth"); axes[2].axis("off")
-        draw_annotation_panel(axes[2], base_rgb, annotations, colors, ctx_path, vis_downsample)
+        ax_ann = axes[n_panels - 1]
+        ax_ann.set_title("标注 Ground Truth"); ax_ann.axis("off")
+        draw_annotation_panel(ax_ann, base_rgb, annotations, colors, ctx_path, vis_downsample)
         ann_handles = [plt.Rectangle((0, 0), 1, 1, fc=colors[lid]) for lid in sorted(annotations)]
-        axes[2].legend(ann_handles, [mapping.get(lid, str(lid)) for lid in sorted(annotations)],
-                       loc="lower right", fontsize=5, ncol=2, framealpha=0.8)
+        ax_ann.legend(ann_handles, [mapping.get(lid, str(lid)) for lid in sorted(annotations)],
+                      loc="lower right", fontsize=5, ncol=2, framealpha=0.8)
 
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -679,8 +690,10 @@ def main():
         print(f"  [{gid:3d}] {global_mapping.get(gid, '?'):20s}  {cnt} 格")
 
     # ── 后处理平滑 ────────────────────────────────────────────────────────────
+    fused_raw = None    # 平滑前的结果，执行了平滑时保留，用于对比可视化
     if args.smooth_kernel > 0 or args.min_region > 0:
         print("\n── 后处理平滑 ────────────────────────────────────────────────")
+        fused_raw = fused
         fused = postprocess(fused, args.smooth_kernel, args.min_region)
         unique, counts = np.unique(fused, return_counts=True)
         print("平滑后结果分布:")
@@ -701,7 +714,8 @@ def main():
     # ── 可视化 ────────────────────────────────────────────────────────────────
     print("\n── 生成可视化 ────────────────────────────────────────────────────")
     visualize(ctx_path, fused, args.vis_downsample,
-              global_mapping, args.output_png, args.alpha, annotations=annotations)
+              global_mapping, args.output_png, args.alpha,
+              annotations=annotations, label_map_raw=fused_raw)
 
 
 if __name__ == "__main__":
