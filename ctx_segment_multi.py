@@ -23,13 +23,16 @@ CTX 输入支持：
 """
 
 import argparse
+import atexit
 import functools
 import io
 import json
 import math
 import os
 import re
+import shutil
 import sys
+import tempfile
 import zipfile
 
 import albumentations as A
@@ -53,11 +56,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # ── helpers (copied from ctx_segment.py) ────────────────────────────────────
 
 def get_vsizip_path(ctx_input: str) -> str:
+    """如果是 zip，解压出内部 tif 到临时目录并返回解压后的真实路径；否则原样返回。
+
+    注：不直接用 GDAL 的 /vsizip/ 读取——MurrayLab 的 CTX 拼接图单个 tif 常超过 4GB，
+    部分 GDAL 版本的 vsizip（基于 minizip）不支持 zip64，会报
+    `cpl_unzOpenCurrentFile() failed`。解压成本地文件可绕开这个问题。
+    解压用的临时目录会在脚本退出时自动清理（受 $TMPDIR 控制，注意磁盘空间）。
+    """
     if ctx_input.lower().endswith(".zip"):
         with zipfile.ZipFile(ctx_input) as zf:
             tif_name = next(n for n in zf.namelist() if n.lower().endswith((".tif", ".tiff")))
-        abs_zip = os.path.abspath(ctx_input).replace("\\", "/")
-        return f"/vsizip/{abs_zip}/{tif_name}"
+            tmp_dir = tempfile.mkdtemp(prefix="ctx_seg_")
+            print(f"  解压 {tif_name} -> {tmp_dir} ...")
+            zf.extract(tif_name, tmp_dir)
+        atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return os.path.join(tmp_dir, tif_name)
     return ctx_input
 
 
