@@ -169,6 +169,22 @@ def parse_task_name(filename: str) -> str:
     return re.sub(r'_\d{8}_\d+\s*$', '', name)
 
 
+
+def collect_annotation_zip_tasks(annotation_dir: str) -> list:
+    """Collect annotation zips from flat or one-level nested annotation folders."""
+    results = []
+    for item in sorted(os.listdir(annotation_dir)):
+        item_path = os.path.join(annotation_dir, item)
+        if item.endswith(".zip") and os.path.isfile(item_path):
+            results.append((item_path, parse_task_name(item)))
+        elif os.path.isdir(item_path):
+            task_name = item
+            for fname in sorted(os.listdir(item_path)):
+                zip_path = os.path.join(item_path, fname)
+                if fname.endswith(".zip") and os.path.isfile(zip_path):
+                    results.append((zip_path, task_name))
+    return results
+
 def get_tile_lonlat_bounds(ctx_path: str):
     with rasterio.open(ctx_path) as ds:
         crs_wkt = ds.crs.to_wkt()
@@ -184,14 +200,11 @@ def get_tile_lonlat_bounds(ctx_path: str):
 def load_annotations_for_tile(annotation_dir: str, lon_min, lat_min, lon_max, lat_max,
                                name_to_id: dict):
     result = {}
-    for fname in sorted(os.listdir(annotation_dir)):
-        if not fname.endswith(".zip"):
-            continue
-        task_name = parse_task_name(fname)
+    for zip_path, task_name in collect_annotation_zip_tasks(annotation_dir):
         if task_name not in name_to_id:
             continue
         label_id = name_to_id[task_name]
-        zip_path = os.path.join(annotation_dir, fname)
+        fname = os.path.basename(zip_path)
         try:
             with zipfile.ZipFile(zip_path) as zf:
                 names   = {decode_name(i.filename): i.filename for i in zf.infolist()}
@@ -223,10 +236,8 @@ def load_annotations_for_tile(annotation_dir: str, lon_min, lat_min, lon_max, la
 
 
 def tile_has_any_annotation(annotation_dir: str, lon_min, lat_min, lon_max, lat_max) -> bool:
-    for fname in sorted(os.listdir(annotation_dir)):
-        if not fname.endswith(".zip"):
-            continue
-        zip_path = os.path.join(annotation_dir, fname)
+    for zip_path, _task_name in collect_annotation_zip_tasks(annotation_dir):
+        fname = os.path.basename(zip_path)
         try:
             with zipfile.ZipFile(zip_path) as zf:
                 names = {decode_name(i.filename): i.filename for i in zf.infolist()}
@@ -251,7 +262,6 @@ def tile_has_any_annotation(annotation_dir: str, lon_min, lat_min, lon_max, lat_
         except Exception as e:
             print(f"  skip {fname}: {e}")
     return False
-
 
 def draw_annotation_panel(ax, base_rgb, annotations, colors, ctx_path, vis_downsample):
     ax.imshow(base_rgb, cmap="gray")
@@ -762,3 +772,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
