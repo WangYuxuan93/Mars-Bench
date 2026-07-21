@@ -221,6 +221,38 @@ def load_annotations_for_tile(annotation_dir: str, lon_min, lat_min, lon_max, la
     return result
 
 
+
+def tile_has_any_annotation(annotation_dir: str, lon_min, lat_min, lon_max, lat_max) -> bool:
+    for fname in sorted(os.listdir(annotation_dir)):
+        if not fname.endswith(".zip"):
+            continue
+        zip_path = os.path.join(annotation_dir, fname)
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                names = {decode_name(i.filename): i.filename for i in zf.infolist()}
+                shp_key = next((k for k in names if k.endswith(".shp")), None)
+                if not shp_key:
+                    continue
+                base = shp_key[:-4]
+
+                def part(ext):
+                    raw = names.get(base + ext)
+                    return io.BytesIO(zf.read(raw)) if raw else None
+
+                sf = shapefile.Reader(
+                    shp=part(".shp"), shx=part(".shx"),
+                    dbf=part(".dbf"), encoding="utf-8",
+                )
+                for shape in sf.iterShapes():
+                    cx = (shape.bbox[0] + shape.bbox[2]) / 2
+                    cy = (shape.bbox[1] + shape.bbox[3]) / 2
+                    if lon_min <= cx <= lon_max and lat_min <= cy <= lat_max:
+                        return True
+        except Exception as e:
+            print(f"  skip {fname}: {e}")
+    return False
+
+
 def draw_annotation_panel(ax, base_rgb, annotations, colors, ctx_path, vis_downsample):
     ax.imshow(base_rgb, cmap="gray")
     with rasterio.open(ctx_path) as ds:
@@ -616,6 +648,8 @@ def main():
 
     parser.add_argument("--annotation-dir", default=None,
                         help="标注 zip 目录（可选，提供后在第三面板绘制 GT 标注）")
+    parser.add_argument("--skip-if-no-annotation", action="store_true",
+                        help="Skip inference when the current CTX tile has no annotation")
     args = parser.parse_args()
 
     device = (torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -627,6 +661,14 @@ def main():
     with rasterio.open(ctx_path) as ds:
         full_w, full_h = ds.width, ds.height
     print(f"CTX 尺寸: {full_w}×{full_h} px")
+
+    if args.skip_if_no_annotation:
+        if not args.annotation_dir:
+            raise ValueError("--skip-if-no-annotation requires --annotation-dir")
+        lon_min, lat_min, lon_max, lat_max = get_tile_lonlat_bounds(ctx_path)
+        if not tile_has_any_annotation(args.annotation_dir, lon_min, lat_min, lon_max, lat_max):
+            print("Current CTX tile has no annotation; skip inference.")
+            return
 
     # ── 三路推理 ─────────────────────────────────────────────────────────────
     scale_cfgs = [
